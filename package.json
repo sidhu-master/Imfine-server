@@ -1,0 +1,21 @@
+{
+  "name": "imfine-server",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "SELF_GUARD=1 node app.js",
+    "dev": "node app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "^2.14.6",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.13.0"
+  }
+}
