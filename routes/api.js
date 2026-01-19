@@ -1,3 +1,5 @@
+const jwt = require("jsonwebtoken");
+
 const registerApiRoutes = (
   app,
   { asyncHandler, requireAuth, getDb, getShanghaiParts, randomId, createWeChatClient, uploadToCos, getEnv, requireEnv }
@@ -9,6 +11,25 @@ const registerApiRoutes = (
     if (["m", "male", "man", "boy", "男", "1"].includes(s)) return "male";
     if (["f", "female", "woman", "girl", "女", "2"].includes(s)) return "female";
     return "";
+  };
+
+  const normalizeBase64Image = (raw) => {
+    const s = raw == null ? "" : String(raw).trim();
+    if (!s) return { base64: "", contentTypeHint: "" };
+    const m = s.match(/^data:([^;]+);base64,(.*)$/i);
+    if (m) return { base64: (m[2] || "").trim(), contentTypeHint: (m[1] || "").trim().toLowerCase() };
+    return { base64: s, contentTypeHint: "" };
+  };
+
+  const sniffImageType = (buf, contentTypeHint) => {
+    const hint = contentTypeHint ? String(contentTypeHint).toLowerCase() : "";
+    const b = Buffer.isBuffer(buf) ? buf : Buffer.from([]);
+    if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: "jpg", contentType: "image/jpeg" };
+    if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { ext: "png", contentType: "image/png" };
+    if (hint === "image/jpeg" || hint === "image/jpg") return { ext: "jpg", contentType: "image/jpeg" };
+    if (hint === "image/png") return { ext: "png", contentType: "image/png" };
+    if (hint === "image/webp") return { ext: "webp", contentType: "image/webp" };
+    return { ext: "png", contentType: "image/png" };
   };
 
   app.post(
@@ -29,7 +50,6 @@ const registerApiRoutes = (
       const r = await wx.jscode2session({ code });
       if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
 
-      const jwt = require("jsonwebtoken");
       const secret = requireEnv("API_JWT_SECRET");
       const token = jwt.sign({ openid: r.openid }, secret, { algorithm: "HS256", expiresIn: "30d" });
       return res.json({ ok: true, openid: r.openid, token });
@@ -81,11 +101,31 @@ const registerApiRoutes = (
       if (!openid) return res.status(401).json({ ok: false, error: "invalid token" });
 
       const avatarUrlRaw = req.body && req.body.avatarUrl != null ? String(req.body.avatarUrl) : null;
-      if (avatarUrlRaw === null) return res.status(400).json({ ok: false, error: "missing avatarUrl" });
-      const avatarUrl = avatarUrlRaw.trim();
-      if (avatarUrl.length > 500) return res.status(400).json({ ok: false, error: "avatarUrl too long" });
-      if (avatarUrl && !(avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://"))) {
-        return res.status(400).json({ ok: false, error: "invalid avatarUrl" });
+      const avatarBase64Raw = req.body && req.body.avatarBase64 != null ? String(req.body.avatarBase64) : "";
+      const avatarBase64Trimmed = avatarBase64Raw ? avatarBase64Raw.trim() : "";
+
+      let avatarUrl = "";
+      if (avatarBase64Trimmed) {
+        const { base64, contentTypeHint } = normalizeBase64Image(avatarBase64Trimmed);
+        if (!base64) return res.status(400).json({ ok: false, error: "missing avatar" });
+        let buf = null;
+        try {
+          buf = Buffer.from(base64, "base64");
+        } catch (e) {
+          buf = null;
+        }
+        if (!buf || !buf.length) return res.status(400).json({ ok: false, error: "missing avatar" });
+        if (buf.length > 3 * 1024 * 1024) return res.status(413).json({ ok: false, error: "avatar too large" });
+        const { ext, contentType } = sniffImageType(buf, contentTypeHint);
+        const key = `wy/user_avatars/${openid}_${randomId()}.${ext}`;
+        avatarUrl = await uploadToCos({ key, buffer: buf, contentType });
+      } else {
+        if (avatarUrlRaw === null) return res.status(400).json({ ok: false, error: "missing avatar" });
+        avatarUrl = avatarUrlRaw.trim();
+        if (avatarUrl.length > 500) return res.status(400).json({ ok: false, error: "avatarUrl too long" });
+        if (avatarUrl && !(avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://"))) {
+          return res.status(400).json({ ok: false, error: "invalid avatarUrl" });
+        }
       }
 
       const now = new Date();
@@ -380,8 +420,9 @@ const registerApiRoutes = (
 
       const inviteeNameRaw = req.body && req.body.inviteeName != null ? String(req.body.inviteeName) : "";
       const inviteeAvatarUrlRaw = req.body && req.body.inviteeAvatarUrl != null ? String(req.body.inviteeAvatarUrl) : "";
+      const inviteeAvatarBase64Raw = req.body && req.body.inviteeAvatarBase64 != null ? String(req.body.inviteeAvatarBase64) : "";
       const inviteeName = inviteeNameRaw ? inviteeNameRaw.trim().slice(0, 50) : "";
-      const inviteeAvatarUrl = inviteeAvatarUrlRaw ? inviteeAvatarUrlRaw.trim().slice(0, 500) : "";
+      const inviteeAvatarUrlInput = inviteeAvatarUrlRaw ? inviteeAvatarUrlRaw.trim().slice(0, 500) : "";
 
       const channelRaw = req.body && req.body.channel != null ? String(req.body.channel) : "";
       const channel = channelRaw ? channelRaw.trim() : "";
@@ -406,6 +447,27 @@ const registerApiRoutes = (
         inviteeOpenid = s.openid || "";
       }
       if (!inviteeOpenid) return res.status(502).json({ ok: false, error: "missing openid" });
+
+      let inviteeAvatarUrl = inviteeAvatarUrlInput;
+      if (inviteeAvatarUrl) {
+        if (!(inviteeAvatarUrl.startsWith("http://") || inviteeAvatarUrl.startsWith("https://"))) {
+          return res.status(400).json({ ok: false, error: "invalid inviteeAvatarUrl" });
+        }
+      } else {
+        const { base64, contentTypeHint } = normalizeBase64Image(inviteeAvatarBase64Raw);
+        if (!base64) return res.status(400).json({ ok: false, error: "missing avatar" });
+        let buf = null;
+        try {
+          buf = Buffer.from(base64, "base64");
+        } catch (e) {
+          buf = null;
+        }
+        if (!buf || !buf.length) return res.status(400).json({ ok: false, error: "missing avatar" });
+        if (buf.length > 3 * 1024 * 1024) return res.status(413).json({ ok: false, error: "avatar too large" });
+        const { ext, contentType } = sniffImageType(buf, contentTypeHint);
+        const key = `wy/invitee_avatars/${inviteeOpenid}_${randomId()}.${ext}`;
+        inviteeAvatarUrl = await uploadToCos({ key, buffer: buf, contentType });
+      }
 
       let inviterId = inviterIdFallback;
       let inviterName = inviterNameFallback;

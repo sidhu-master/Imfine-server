@@ -129,7 +129,8 @@ Base URL：`https://api.sidhu.net.cn`
 
 ```json
 {
-  "avatarUrl": "头像 URL（http/https，传空字符串表示清空）"
+  "avatarBase64": "可选，头像 base64（wx.getFileSystemManager().readFile 读到的 base64，或 data:image/...;base64,...）",
+  "avatarUrl": "可选，头像 URL（http/https，传空字符串表示清空；和 avatarBase64 二选一）"
 }
 ```
 
@@ -187,7 +188,7 @@ Base URL：`https://api.sidhu.net.cn`
 imageUrl 说明：
 
 - 优先返回 COS 的公开 HTTPS 地址（需要配置 COS_* 环境变量）
-- 未配置 COS 时，会返回 `${PUBLIC_BASE_URL}/__dev_files/...`（需要配置 PUBLIC_BASE_URL 为已备案的 HTTPS 域名，并在小程序后台把该域名加入 downloadFile 合法域名）
+- 未配置 COS 时，会把图片存到 Mongo（`wy_files`）并返回 `${PUBLIC_BASE_URL}/__db_files/...`（需要配置 PUBLIC_BASE_URL 为已备案的 HTTPS 域名，并在小程序后台把该域名加入 downloadFile 合法域名）
 
 ### 生成邀请小程序码
 
@@ -290,7 +291,8 @@ imageUrl 说明：
   "inviterId": "可选兜底（无 sceneId 时使用）",
   "inviterName": "可选兜底（无 sceneId 时使用）",
   "inviteeName": "可选，被邀请人昵称",
-  "inviteeAvatarUrl": "可选，被邀请人头像 URL",
+  "inviteeAvatarBase64": "可选，被邀请人头像 base64（wx.getFileSystemManager().readFile 读到的 base64，或 data:image/...;base64,...）",
+  "inviteeAvatarUrl": "可选，被邀请人头像 URL（http/https，和 inviteeAvatarBase64 二选一）",
   "channel": "可选，mini_landing",
   "env_version": "可选，develop | trial | release"
 }

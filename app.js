@@ -195,7 +195,8 @@ const translateErrorBody = (p, body) => {
 if (shouldLogHttp) {
   app.use((req, res, next) => {
     const p = typeof req.path === "string" ? req.path : "";
-    const shouldLogPath = Boolean(p) && !p.startsWith("/health") && !p.startsWith("/__dev_files/");
+    const shouldLogPath =
+      Boolean(p) && !p.startsWith("/health") && !p.startsWith("/__dev_files/") && !p.startsWith("/__db_files/");
     if (!shouldLogPath) return next();
 
     const reqId = crypto.randomBytes(6).toString("hex");
@@ -424,7 +425,7 @@ const requireInternalAuth = (req, res) => {
   return false;
 };
 
-const randomId = (prefix) => `${prefix}${crypto.randomBytes(8).toString("hex")}`;
+const randomId = (prefix = "") => `${prefix}${crypto.randomBytes(8).toString("hex")}`;
 
 const getShanghaiParts = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat("zh-CN", {
