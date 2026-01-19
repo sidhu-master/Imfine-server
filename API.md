@@ -321,6 +321,29 @@ imageUrl 说明：
 }
 ```
 
+### 移除守护人
+
+`POST /api/notifyGuardian/removeGuardian`
+
+说明：从“我的守护人”中解绑/移除指定守护人。
+
+请求：
+
+```json
+{
+  "guardianOpenid": "要移除的守护人 openid（即 userProfile.guardians[i].id）"
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "removedCount": 1
+}
+```
+
 ### 设置提醒规则
 
 `POST /api/notifyGuardian/setRule`

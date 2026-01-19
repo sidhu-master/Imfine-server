@@ -622,6 +622,44 @@ const registerApiRoutes = (
   );
 
   app.post(
+    "/api/notifyGuardian/removeGuardian",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const db = await getDb();
+      const openid = req.user && req.user.openid ? String(req.user.openid) : "";
+      if (!openid) return res.status(401).json({ ok: false, error: "invalid token" });
+
+      const raw =
+        req.body && (req.body.guardianOpenid || req.body.guardianId || req.body.inviteeOpenid || req.body.id) != null
+          ? String(req.body.guardianOpenid || req.body.guardianId || req.body.inviteeOpenid || req.body.id)
+          : "";
+      const guardianOpenid = raw.trim();
+      if (!guardianOpenid) return res.status(400).json({ ok: false, error: "missing guardianOpenid" });
+      if (guardianOpenid === openid) return res.status(400).json({ ok: false, error: "invalid guardianOpenid" });
+
+      const links = db.collection("wy_guardian_mini_links");
+      const existing = await links
+        .find({ inviterOpenid: openid, inviteeOpenid: guardianOpenid })
+        .project({ inviteeMpOpenid: 1 })
+        .limit(20)
+        .toArray();
+
+      const del = await links.deleteMany({ inviterOpenid: openid, inviteeOpenid: guardianOpenid });
+      const removedCount = Number(del && del.deletedCount) || 0;
+
+      const mpOpenids = [...new Set((existing || []).map((d) => (d && d.inviteeMpOpenid != null ? String(d.inviteeMpOpenid) : "")).filter(Boolean))];
+      if (mpOpenids.length) {
+        const mpLinks = db.collection("wy_guardian_links");
+        await Promise.allSettled(
+          mpOpenids.map((mp) => mpLinks.deleteMany({ elderOpenid: openid, guardianMpOpenid: mp }))
+        );
+      }
+
+      return res.json({ ok: true, removedCount });
+    })
+  );
+
+  app.post(
     "/api/notifyGuardian/setRule",
     requireAuth,
     asyncHandler(async (req, res) => {
