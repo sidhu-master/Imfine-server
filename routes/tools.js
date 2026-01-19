@@ -433,7 +433,7 @@ const registerToolsRoutes = (
       };
 
       $("serverRestart").onclick = async () => {
-        $("serverRestartStatus").textContent = "请求中...";
+        $("serverRestartStatus").textContent = "更新并重启中...";
         $("serverRestartStatus").classList.remove("error");
         try {
           let runtime = null;
@@ -455,7 +455,7 @@ const registerToolsRoutes = (
           }
           const r = await fetchJson("/internal/restartServer", { method: "POST" });
           renderRuntime(r && r.runtime ? r.runtime : runtime);
-          $("serverRestartStatus").textContent = "已触发重启（页面可能会断开）";
+          $("serverRestartStatus").textContent = "已开始更新并触发重启（页面可能会断开）";
         } catch (e) {
           $("serverRestartStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
           $("serverRestartStatus").classList.add("error");

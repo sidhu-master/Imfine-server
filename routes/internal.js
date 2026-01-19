@@ -1,6 +1,9 @@
 const express = require("express");
 const { handleMpCallback } = require("../mpCallback");
 const fs = require("fs");
+const crypto = require("crypto");
+const path = require("path");
+const { execFile } = require("child_process");
 
 const registerInternalRoutes = (
   app,
@@ -17,6 +20,8 @@ const registerInternalRoutes = (
     nowIso,
   }
 ) => {
+  let restartInProgress = false;
+
   const parseTimeTextToMinutes = (timeText) => {
     const s = String(timeText || "").trim();
     const m = /^(\d{2}):(\d{2})$/.exec(s);
@@ -871,11 +876,93 @@ const registerInternalRoutes = (
     "/internal/restartServer",
     asyncHandler(async (req, res) => {
       if (!requireInternalAuth(req, res)) return;
+      if (restartInProgress) return res.status(409).json({ ok: false, error: "重启进行中" });
+      restartInProgress = true;
+
       const runtime = getRuntimeInfo();
-      res.json({ ok: true, runtime });
-      setTimeout(() => {
-        process.exit(0);
-      }, 300);
+      const restartId = crypto.randomBytes(6).toString("hex");
+      res.json({ ok: true, restartId, runtime, message: "已开始拉取最新代码并将自动重启" });
+
+      setImmediate(async () => {
+        const repoDir = path.resolve(__dirname, "..");
+        const runGit = (args, options = {}) =>
+          new Promise((resolve) => {
+            const startedAt = Date.now();
+            execFile(
+              "git",
+              args,
+              {
+                cwd: repoDir,
+                env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+                timeout: options.timeoutMs != null ? options.timeoutMs : 25_000,
+                maxBuffer: 1024 * 1024,
+              },
+              (err, stdout, stderr) => {
+                const out = String(stdout || "");
+                const errOut = String(stderr || "");
+                if (err) {
+                  resolve({
+                    ok: false,
+                    error: String(err && err.message ? err.message : err),
+                    stdout: out.slice(-8000),
+                    stderr: errOut.slice(-8000),
+                    tookMs: Date.now() - startedAt,
+                  });
+                  return;
+                }
+                resolve({
+                  ok: true,
+                  stdout: out.slice(-8000),
+                  stderr: errOut.slice(-8000),
+                  tookMs: Date.now() - startedAt,
+                });
+              }
+            );
+          });
+
+        const steps = {};
+        let stashUsed = false;
+        try {
+          steps.inRepo = await runGit(["rev-parse", "--is-inside-work-tree"]);
+          steps.headBefore = await runGit(["rev-parse", "HEAD"]);
+          steps.statusBefore = await runGit(["status", "--porcelain"]);
+
+          const dirty = Boolean(steps.statusBefore.ok && (steps.statusBefore.stdout || "").trim());
+          if (dirty) {
+            steps.stashPush = await runGit(["stash", "push", "-u", "-m", "tools-restart-autostash"], { timeoutMs: 60_000 });
+            stashUsed = Boolean(steps.stashPush.ok);
+          }
+
+          steps.pull = await runGit(
+            ["-c", "http.version=HTTP/1.1", "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "pull", "--ff-only"],
+            { timeoutMs: 180_000 }
+          );
+          steps.headAfter = await runGit(["rev-parse", "HEAD"]);
+        } catch (err) {
+          steps.exception = { ok: false, error: err && err.stack ? String(err.stack) : String(err) };
+        } finally {
+          if (stashUsed) steps.stashPop = await runGit(["stash", "pop"], { timeoutMs: 60_000 });
+          restartInProgress = false;
+        }
+
+        try {
+          const headBefore = steps.headBefore && steps.headBefore.ok ? String(steps.headBefore.stdout || "").trim() : "";
+          const headAfter = steps.headAfter && steps.headAfter.ok ? String(steps.headAfter.stdout || "").trim() : "";
+          const pulled = headBefore && headAfter ? headBefore !== headAfter : null;
+          console.log(
+            JSON.stringify({
+              ts: nowIso(),
+              tag: "restartServer",
+              restartId,
+              repoDir,
+              pulled,
+              steps,
+            })
+          );
+        } catch (_) {}
+
+        setTimeout(() => process.exit(0), 300);
+      });
     })
   );
 
