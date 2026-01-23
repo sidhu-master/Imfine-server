@@ -638,6 +638,7 @@ const registerApiRoutes = (
           alreadyAccepted: true,
           acceptedAt: Number.isFinite(acceptedAt) ? acceptedAt : null,
           openid: inviteeOpenid,
+          unionid: inviteeUnionid || "",
           token,
         });
       }
@@ -690,6 +691,7 @@ const registerApiRoutes = (
         alreadyAccepted: false,
         acceptedAt: now.getTime(),
         openid: inviteeOpenid,
+        unionid: inviteeUnionid || "",
         token,
       });
     })
