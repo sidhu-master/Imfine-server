@@ -94,11 +94,14 @@ const registerInternalRoutes = (
     return candidates[0] || "";
   };
 
-  const buildTemplateData = ({ elderName, dateKey, remark }) => {
+  const buildTemplateData = ({ elderName, dateKey, dueTimeText }) => {
     const nameValue = elderName ? `被守护者${elderName}` : "被守护者（未命名）";
+    const datePart = String(dateKey || "").trim();
+    const timePart = String(dueTimeText || "").trim();
+    const timeValue = datePart && timePart ? `${datePart} ${timePart}` : datePart || timePart || "";
     return {
       thing3: { value: nameValue },
-      time1: { value: String(dateKey || "") },
+      time1: { value: timeValue },
       const2: { value: "未打卡" },
     };
   };
@@ -221,7 +224,7 @@ const registerInternalRoutes = (
                 const r = await wx.sendMpTemplate({
                   toUser,
                   templateId,
-                  data: buildTemplateData({ elderName, dateKey, remark }),
+                  data: buildTemplateData({ elderName, dateKey, dueTimeText: dueText }),
                   miniProgram: miniAppid ? { appid: miniAppid, pagepath } : undefined,
                 });
                 await logsCol.updateOne(
@@ -315,7 +318,7 @@ const registerInternalRoutes = (
                 const r = await wx.sendMpTemplate({
                   toUser,
                   templateId,
-                  data: buildTemplateData({ elderName, dateKey, remark }),
+                  data: buildTemplateData({ elderName, dateKey, dueTimeText: guardianDueText }),
                   miniProgram: miniAppid ? { appid: miniAppid, pagepath } : undefined,
                 });
                 if (r.ok) sentTo.push(toUser);
@@ -888,7 +891,7 @@ const registerInternalRoutes = (
       const r = await wx.sendMpTemplate({
         toUser,
         templateId,
-        data: buildTemplateData({ elderName: effectiveElderName, dateKey, remark }),
+        data: buildTemplateData({ elderName: effectiveElderName, dateKey, dueTimeText }),
         miniProgram: miniAppid ? { appid: miniAppid, pagepath } : undefined,
       });
       if (!r.ok) return res.status(502).json({ ok: false, error: r.error || "send failed" });

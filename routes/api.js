@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
 const registerApiRoutes = (
   app,
@@ -30,6 +31,26 @@ const registerApiRoutes = (
     if (hint === "image/png") return { ext: "png", contentType: "image/png" };
     if (hint === "image/webp") return { ext: "webp", contentType: "image/webp" };
     return { ext: "png", contentType: "image/png" };
+  };
+
+  const decodeUserProfile = ({ sessionKey, encryptedData, iv }) => {
+    const key = String(sessionKey || "").trim();
+    const enc = String(encryptedData || "").trim();
+    const ivText = String(iv || "").trim();
+    if (!key || !enc || !ivText) return null;
+    try {
+      const sessionKeyBuf = Buffer.from(key, "base64");
+      const encryptedBuf = Buffer.from(enc, "base64");
+      const ivBuf = Buffer.from(ivText, "base64");
+      const decipher = crypto.createDecipheriv("aes-128-cbc", sessionKeyBuf, ivBuf);
+      decipher.setAutoPadding(true);
+      let decoded = decipher.update(encryptedBuf, "binary", "utf8");
+      decoded += decipher.final("utf8");
+      const obj = JSON.parse(decoded);
+      return obj && typeof obj === "object" ? obj : null;
+    } catch (e) {
+      return null;
+    }
   };
 
   app.post(
@@ -439,8 +460,13 @@ const registerApiRoutes = (
       const inviteeNameRaw = req.body && req.body.inviteeName != null ? String(req.body.inviteeName) : "";
       const inviteeAvatarUrlRaw = req.body && req.body.inviteeAvatarUrl != null ? String(req.body.inviteeAvatarUrl) : "";
       const inviteeAvatarBase64Raw = req.body && req.body.inviteeAvatarBase64 != null ? String(req.body.inviteeAvatarBase64) : "";
+      const userProfileEncryptedDataRaw =
+        req.body && req.body.userProfileEncryptedData != null ? String(req.body.userProfileEncryptedData) : "";
+      const userProfileIvRaw = req.body && req.body.userProfileIv != null ? String(req.body.userProfileIv) : "";
       const inviteeName = inviteeNameRaw ? inviteeNameRaw.trim().slice(0, 50) : "";
       const inviteeAvatarUrlInput = inviteeAvatarUrlRaw ? inviteeAvatarUrlRaw.trim().slice(0, 500) : "";
+      const userProfileEncryptedData = userProfileEncryptedDataRaw.trim();
+      const userProfileIv = userProfileIvRaw.trim();
 
       const channelRaw = req.body && req.body.channel != null ? String(req.body.channel) : "";
       const channel = channelRaw ? channelRaw.trim() : "";
@@ -457,14 +483,24 @@ const registerApiRoutes = (
 
       const mockOpenid = getEnv("WX_LOGIN_MOCK_OPENID");
       let inviteeOpenid = "";
+      let inviteeSessionKey = "";
       if (mockOpenid) {
         inviteeOpenid = String(mockOpenid);
       } else {
         const s = await wx.jscode2session({ code });
         if (!s.ok) return res.status(502).json({ ok: false, error: s.error || "jscode2session failed" });
         inviteeOpenid = s.openid || "";
+        inviteeSessionKey = s.sessionKey || s.session_key || "";
       }
       if (!inviteeOpenid) return res.status(502).json({ ok: false, error: "missing openid" });
+
+      const profileObj = decodeUserProfile({
+        sessionKey: inviteeSessionKey,
+        encryptedData: userProfileEncryptedData,
+        iv: userProfileIv,
+      });
+      const unionidRaw = profileObj && (profileObj.unionId || profileObj.unionid) ? String(profileObj.unionId || profileObj.unionid) : "";
+      const inviteeUnionid = unionidRaw.trim();
 
       let inviteeAvatarUrl = inviteeAvatarUrlInput;
       if (inviteeAvatarUrl) {
@@ -567,6 +603,18 @@ const registerApiRoutes = (
       const links = db.collection("wy_guardian_mini_links");
       const existing = await links.findOne({ _id: relationKey });
       if (existing) {
+        if (inviteeUnionid) {
+          const now = new Date();
+          await db.collection("wy_users").updateOne(
+            { _id: inviteeOpenid },
+            { $set: { openid: inviteeOpenid, unionid: inviteeUnionid, updatedAt: now }, $setOnInsert: { createdAt: now } },
+            { upsert: true }
+          );
+          await links.updateOne(
+            { _id: relationKey },
+            { $set: { inviteeUnionid, updatedAt: now } }
+          );
+        }
         if (verifiedInviteeMpOpenid) {
           const now = new Date();
           await links.updateOne(
@@ -600,6 +648,7 @@ const registerApiRoutes = (
         inviterName,
         inviterOpenid,
         inviteeOpenid,
+        ...(inviteeUnionid ? { inviteeUnionid } : {}),
         inviteeName,
         inviteeAvatarUrl,
         sceneId: resolvedSceneId || "",
@@ -609,6 +658,13 @@ const registerApiRoutes = (
         updatedAt: now,
         acceptedAt: now,
       };
+      if (inviteeUnionid) {
+        await db.collection("wy_users").updateOne(
+          { _id: inviteeOpenid },
+          { $set: { openid: inviteeOpenid, unionid: inviteeUnionid, updatedAt: now }, $setOnInsert: { createdAt: now } },
+          { upsert: true }
+        );
+      }
       if (verifiedInviteeMpOpenid) {
         set.inviteeMpOpenid = verifiedInviteeMpOpenid;
         set.inviteeMpVerifiedAt = now;
