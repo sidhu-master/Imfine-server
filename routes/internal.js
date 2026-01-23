@@ -97,9 +97,9 @@ const registerInternalRoutes = (
   const buildTemplateData = ({ elderName, dateKey, remark }) => {
     const nameValue = elderName ? `被守护者${elderName}` : "被守护者（未命名）";
     return {
-      name: { value: nameValue },
-      date: { value: String(dateKey || "") },
-      remark: { value: String(remark || "") },
+      thing3: { value: nameValue },
+      time1: { value: String(dateKey || "") },
+      const2: { value: "未打卡" },
     };
   };
 
