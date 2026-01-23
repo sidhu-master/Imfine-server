@@ -222,29 +222,6 @@ imageUrl 说明：
 }
 ```
 
-### 生成邀请公众号二维码
-
-`POST /api/notifyGuardian/createInviteMpQr`
-
-请求：
-
-```json
-{
-  "inviterId": "邀请人ID（业务侧自定义）",
-  "inviterName": "邀请人昵称"
-}
-```
-
-响应：
-
-```json
-{
-  "ok": true,
-  "scene": "wy_i_...",
-  "imageUrl": "二维码图片URL"
-}
-```
-
 ### 生成绑定公众号二维码
 
 `POST /api/notifyGuardian/createBindQr`
@@ -264,7 +241,8 @@ imageUrl 说明：
 {
   "ok": true,
   "scene": "wy_b_...",
-  "imageUrl": "二维码图片URL"
+  "imageUrl": "二维码图片URL",
+  "cardUrl": "小程序短链URL"
 }
 ```
 
