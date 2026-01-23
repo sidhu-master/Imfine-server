@@ -392,11 +392,10 @@ const registerApiRoutes = (
         { upsert: true }
       );
 
-      const qr = await wx.createMpQr({ scene, expireSeconds: 30 * 86400 });
+      const qr = await wx.createMpQr({ scene, expireSeconds: 30 * 86400, withImage: false });
       if (!qr.ok) return res.status(502).json({ ok: false, error: qr.error });
 
-      const key = `bind_mpqr/${scene}.png`;
-      const imageUrl = await uploadToCos({ key, buffer: qr.buffer, contentType: "image/png" });
+      const imageUrl = "";
 
       const cardParams = [
         `inviterId=${encodeURIComponent(inviterId)}`,
