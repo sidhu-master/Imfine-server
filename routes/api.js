@@ -500,11 +500,14 @@ const registerApiRoutes = (
         iv: userProfileIv,
       });
       const unionidRaw = profileObj && (profileObj.unionId || profileObj.unionid) ? String(profileObj.unionId || profileObj.unionid) : "";
-      const inviteeUnionid = unionidRaw.trim();
+      let inviteeUnionid = unionidRaw.trim();
       const profileWatermark = profileObj && profileObj.watermark && typeof profileObj.watermark === "object" ? profileObj.watermark : null;
       const profileAppid = profileWatermark && profileWatermark.appid ? String(profileWatermark.appid) : "";
       const profileTimestamp = profileWatermark && profileWatermark.timestamp ? Number(profileWatermark.timestamp) : null;
-      const unionidStatus = inviteeUnionid ? "ok" : profileObj ? "missing_unionid" : "decode_failed";
+      let unionidStatus = inviteeUnionid ? "ok" : profileObj ? "missing_unionid" : "decode_failed";
+      let unionidSource = inviteeUnionid ? "mini_profile" : "";
+      let unionidMpSubscribe = null;
+      let unionidMpError = "";
 
       let inviteeAvatarUrl = inviteeAvatarUrlInput;
       if (inviteeAvatarUrl) {
@@ -597,6 +600,24 @@ const registerApiRoutes = (
           } catch (_) {}
         }
       }
+      if (!inviteeUnionid && verifiedInviteeMpOpenid) {
+        const mpUser = await wx.getMpUserInfo({ openid: verifiedInviteeMpOpenid });
+        if (mpUser.ok) {
+          const user = mpUser.user && typeof mpUser.user === "object" ? mpUser.user : {};
+          const mpUnionidRaw = user.unionid != null ? String(user.unionid) : "";
+          const mpUnionid = mpUnionidRaw.trim();
+          unionidMpSubscribe = user.subscribe != null ? Number(user.subscribe) : null;
+          if (mpUnionid) {
+            inviteeUnionid = mpUnionid;
+            unionidStatus = "ok";
+            unionidSource = "mp_userinfo";
+          } else if (unionidStatus === "decode_failed") {
+            unionidStatus = "missing_unionid";
+          }
+        } else {
+          unionidMpError = mpUser.error || "get mp user failed";
+        }
+      }
 
       const relationKey = inviterOpenid
         ? `${inviterOpenid}__${inviteeOpenid}`
@@ -646,6 +667,9 @@ const registerApiRoutes = (
           unionidStatus,
           unionidProfileAppid: profileAppid,
           unionidProfileTimestamp: Number.isFinite(profileTimestamp) ? profileTimestamp : null,
+          unionidSource,
+          unionidMpSubscribe,
+          unionidMpError,
           token,
         });
       }
@@ -702,6 +726,9 @@ const registerApiRoutes = (
         unionidStatus,
         unionidProfileAppid: profileAppid,
         unionidProfileTimestamp: Number.isFinite(profileTimestamp) ? profileTimestamp : null,
+        unionidSource,
+        unionidMpSubscribe,
+        unionidMpError,
         token,
       });
     })
