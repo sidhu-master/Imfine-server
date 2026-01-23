@@ -501,6 +501,10 @@ const registerApiRoutes = (
       });
       const unionidRaw = profileObj && (profileObj.unionId || profileObj.unionid) ? String(profileObj.unionId || profileObj.unionid) : "";
       const inviteeUnionid = unionidRaw.trim();
+      const profileWatermark = profileObj && profileObj.watermark && typeof profileObj.watermark === "object" ? profileObj.watermark : null;
+      const profileAppid = profileWatermark && profileWatermark.appid ? String(profileWatermark.appid) : "";
+      const profileTimestamp = profileWatermark && profileWatermark.timestamp ? Number(profileWatermark.timestamp) : null;
+      const unionidStatus = inviteeUnionid ? "ok" : profileObj ? "missing_unionid" : "decode_failed";
 
       let inviteeAvatarUrl = inviteeAvatarUrlInput;
       if (inviteeAvatarUrl) {
@@ -639,6 +643,9 @@ const registerApiRoutes = (
           acceptedAt: Number.isFinite(acceptedAt) ? acceptedAt : null,
           openid: inviteeOpenid,
           unionid: inviteeUnionid || "",
+          unionidStatus,
+          unionidProfileAppid: profileAppid,
+          unionidProfileTimestamp: Number.isFinite(profileTimestamp) ? profileTimestamp : null,
           token,
         });
       }
@@ -692,6 +699,9 @@ const registerApiRoutes = (
         acceptedAt: now.getTime(),
         openid: inviteeOpenid,
         unionid: inviteeUnionid || "",
+        unionidStatus,
+        unionidProfileAppid: profileAppid,
+        unionidProfileTimestamp: Number.isFinite(profileTimestamp) ? profileTimestamp : null,
         token,
       });
     })
