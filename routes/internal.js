@@ -49,6 +49,23 @@ const registerInternalRoutes = (
     return Math.max(0, Math.min(23 * 60 + 59, base + g));
   };
 
+  const computeGuardianDueSpec = ({ deadline, graceMinutes }) => {
+    const base = parseTimeTextToMinutes(deadline);
+    if (base == null) return null;
+    const g = Number.isFinite(graceMinutes) ? Math.floor(graceMinutes) : 0;
+    const total = base + g;
+    const dayShift = Math.floor(total / 1440);
+    const dueMin = ((total % 1440) + 1440) % 1440;
+    return { dayShift, dueMin, dueText: minutesToTimeText(dueMin) };
+  };
+
+  const formatWaitText = (graceMinutes) => {
+    const m = Number(graceMinutes);
+    if (!Number.isFinite(m)) return "24h";
+    if (m % 60 === 0) return `${m / 60}h`;
+    return `${m}m`;
+  };
+
   const shiftDateKey = (dateKey, deltaDays) => {
     const s = String(dateKey || "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
@@ -111,18 +128,22 @@ const registerInternalRoutes = (
 
       const user = await usersCol.findOne({ _id: elderOpenid });
       const deadline = user && user.deadline ? String(user.deadline) : "22:30";
-      const graceMinutes = user && user.graceMinutes != null ? Number(user.graceMinutes) : 0;
-      const dueMin = computeDueMinutes({ deadline, graceMinutes });
-      if (dueMin == null) {
+      const graceMinutesRaw = user && user.graceMinutes != null ? Number(user.graceMinutes) : NaN;
+      const graceMinutes = Number.isFinite(graceMinutesRaw) ? graceMinutesRaw : 1440;
+
+      const elderDueMin = computeDueMinutes({ deadline, graceMinutes: 0 });
+      const guardianDue = computeGuardianDueSpec({ deadline, graceMinutes });
+      if (elderDueMin == null || !guardianDue) {
         elderResults.push({ elderOpenid, dateKey: nowDateKey, skipped: true, reason: "invalid_rule" });
         guardianResults.push({ elderOpenid, dateKey: shiftDateKey(nowDateKey, -1), skipped: true, reason: "invalid_rule" });
         continue;
       }
 
-      const dueText = minutesToTimeText(dueMin);
+      const dueText = minutesToTimeText(elderDueMin);
+      const guardianDueText = guardianDue.dueText;
       const elderName = getElderDisplayName(user, elderOpenid);
 
-      const shouldRunNow = Boolean(force) || nowMin >= dueMin;
+      const shouldRunNow = Boolean(force) || nowMin >= elderDueMin;
 
       {
         const dateKey = String(nowDateKey || "").trim();
@@ -225,15 +246,17 @@ const registerInternalRoutes = (
       }
 
       {
-        const dateKey = shiftDateKey(nowDateKey, -1);
+        const dateKey = shiftDateKey(nowDateKey, -guardianDue.dayShift);
         if (!dateKey) {
           guardianResults.push({ elderOpenid, dateKey, skipped: true, reason: "invalid_dateKey" });
-        } else if (!shouldRunNow) {
-          guardianResults.push({ elderOpenid, dateKey, skipped: true, reason: "not_due", dueTimeText: dueText });
+        } else if (!(Boolean(force) || nowMin >= guardianDue.dueMin)) {
+          guardianResults.push({ elderOpenid, dateKey, skipped: true, reason: "not_due", dueTimeText: guardianDueText });
         } else {
           const logId = `${elderOpenid}__${dateKey}__guardian`;
           let acquired = true;
           if (!force) {
+            const waitText = formatWaitText(graceMinutes);
+            const waitMs = Math.max(0, Number(graceMinutes) || 0) * 60_000;
             const lock = await logsCol.updateOne(
               { _id: logId },
               {
@@ -243,7 +266,7 @@ const registerInternalRoutes = (
                   kind: "guardian",
                   deadline,
                   graceMinutes,
-                  dueTimeText: dueText,
+                  dueTimeText: guardianDueText,
                   waitMs,
                   waitText,
                   createdAt: now,
@@ -283,7 +306,8 @@ const registerInternalRoutes = (
                 (process.env.MP_TEMPLATE_ID_MISSED_CHECKIN || "").trim() || "v_d28wOOjVrFVHBLHgIrHcy1fzMELqdnQ1p79MN6a_k";
               const miniAppid = process.env.MINIAPP_APPID || "";
               const pagepath = process.env.MINIAPP_PAGEPATH_MISSED || "pages/dailyHome/index";
-              const remark = `${dateKey} 截至 ${dueText} 未打卡，已超过等待期 ${waitText}，请留意。`;
+              const waitText = formatWaitText(graceMinutes);
+              const remark = `${dateKey} 截至 ${guardianDueText} 未打卡，已超过等待期 ${waitText}，请留意。`;
 
               for (const g of guardians) {
                 const toUser = (g && g.guardianMpOpenid != null ? String(g.guardianMpOpenid) : "").trim();

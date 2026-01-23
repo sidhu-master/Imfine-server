@@ -45,10 +45,34 @@ const registerApiRoutes = (
         return res.json({ ok: true, openid: mockOpenid, token });
       }
 
+      const parseWxError = (raw) => {
+        const text = raw == null ? "" : String(raw);
+        if (!text) return null;
+        try {
+          const obj = JSON.parse(text);
+          if (obj && typeof obj === "object") return obj;
+        } catch (e) {}
+        return null;
+      };
+
       const db = await getDb();
       const wx = createWeChatClient({ db, getEnv });
       const r = await wx.jscode2session({ code });
-      if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
+      if (!r.ok) {
+        const wxErr = parseWxError(r.error);
+        const errcode = wxErr && wxErr.errcode != null ? Number(wxErr.errcode) : null;
+        const isClientError = errcode === 40029 || errcode === 40163;
+        const status = isClientError ? 400 : 502;
+        const errorText = isClientError ? r.error : "微信接口不可达";
+        return res.status(status).json({
+          ok: false,
+          error: errorText,
+          ...(isClientError ? {} : { errorEn: r.error }),
+          ...(errcode == null ? {} : { errcode }),
+          ...(wxErr && wxErr.errmsg ? { errmsg: String(wxErr.errmsg) } : {}),
+          ...(!isClientError && wxErr ? { detail: wxErr } : {}),
+        });
+      }
 
       const secret = requireEnv("API_JWT_SECRET");
       const token = jwt.sign({ openid: r.openid }, secret, { algorithm: "HS256", expiresIn: "30d" });
@@ -78,6 +102,10 @@ const registerApiRoutes = (
             },
           ])
       ).values()].sort((a, b) => (b.acceptedAt || 0) - (a.acceptedAt || 0));
+      const deadline = doc && doc.deadline ? String(doc.deadline) : "22:30";
+      const graceMinutesRaw = doc && doc.graceMinutes != null ? Number(doc.graceMinutes) : NaN;
+      const graceMinutes = Number.isFinite(graceMinutesRaw) ? graceMinutesRaw : 1440;
+
       return res.json({
         ok: true,
         userId: openid,
@@ -86,6 +114,10 @@ const registerApiRoutes = (
           gender: doc && doc.gender ? String(doc.gender) : "",
           age: doc && doc.age != null ? doc.age : null,
           avatarUrl: doc && doc.avatarUrl ? String(doc.avatarUrl) : "",
+        },
+        rule: {
+          deadline,
+          graceMinutes,
         },
         guardians,
       });
@@ -266,6 +298,11 @@ const registerApiRoutes = (
       const inviterName = req.body && req.body.inviterName ? String(req.body.inviterName) : "";
       if (!inviterId || !inviterName) return res.status(400).json({ ok: false, error: "missing inviter" });
 
+      const pageRaw = req.body && req.body.page != null ? String(req.body.page) : "";
+      const page = pageRaw ? pageRaw.trim() : "";
+      if (!page) return res.status(400).json({ ok: false, error: "missing page" });
+      if (page !== "pages/acceptInvite/index") return res.status(400).json({ ok: false, error: "invalid page" });
+
       const envVersionRaw = req.body && req.body.env_version != null ? String(req.body.env_version) : "";
       const envVersion = envVersionRaw ? envVersionRaw.trim() : "";
       if (envVersion && !["develop", "trial", "release"].includes(envVersion)) {
@@ -291,42 +328,13 @@ const registerApiRoutes = (
         { upsert: true }
       );
 
-      const img = await wx.createWxaCodeUnlimit({ sceneId, envVersion: envVersion || undefined });
+      const img = await wx.createWxaCodeUnlimit({ sceneId, page, envVersion: envVersion || undefined });
       if (!img.ok) return res.status(502).json({ ok: false, error: img.error });
 
       const key = `invite_wxacode/${sceneId}.png`;
       const imageUrl = await uploadToCos({ key, buffer: img.buffer, contentType: "image/png" });
 
       return res.json({ ok: true, sceneId, imageUrl });
-    })
-  );
-
-  app.post(
-    "/api/notifyGuardian/createInviteMpQr",
-    requireAuth,
-    asyncHandler(async (req, res) => {
-      const inviterId = req.body && req.body.inviterId ? String(req.body.inviterId) : "";
-      const inviterName = req.body && req.body.inviterName ? String(req.body.inviterName) : "";
-      if (!inviterId || !inviterName) return res.status(400).json({ ok: false, error: "missing inviter" });
-
-      const db = await getDb();
-      const wx = createWeChatClient({ db, getEnv });
-
-      const scene = randomId("wy_i_");
-      const now = new Date();
-      await db.collection("wy_invite_mp_scenes").updateOne(
-        { _id: scene },
-        { $set: { inviterId, inviterName, createdAt: now, expireAt: Date.now() + 30 * 86400_000 } },
-        { upsert: true }
-      );
-
-      const qr = await wx.createMpQr({ scene, expireSeconds: 30 * 86400 });
-      if (!qr.ok) return res.status(502).json({ ok: false, error: qr.error });
-
-      const key = `invite_mpqr/${scene}.png`;
-      const imageUrl = await uploadToCos({ key, buffer: qr.buffer, contentType: "image/png" });
-
-      return res.json({ ok: true, scene, imageUrl });
     })
   );
 
@@ -369,7 +377,17 @@ const registerApiRoutes = (
       const key = `bind_mpqr/${scene}.png`;
       const imageUrl = await uploadToCos({ key, buffer: qr.buffer, contentType: "image/png" });
 
-      return res.json({ ok: true, scene, imageUrl });
+      const cardParams = [
+        `inviterId=${encodeURIComponent(inviterId)}`,
+        `inviterName=${encodeURIComponent(inviterName)}`,
+        `bindScene=${encodeURIComponent(scene)}`,
+      ];
+      const pageUrl = `pages/acceptInvite/index?${cardParams.join("&")}`;
+      const shortLink = await wx.createWxaShortLink({ pageUrl });
+      if (!shortLink.ok) return res.status(502).json({ ok: false, error: shortLink.error });
+      const cardUrl = shortLink.link;
+      console.log(JSON.stringify({ tag: "bind_mpqr", scene, inviterId, inviterName, cardUrl }));
+      return res.json({ ok: true, scene, imageUrl, cardUrl });
     })
   );
 

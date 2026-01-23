@@ -61,6 +61,10 @@ Base URL：`https://api.sidhu.net.cn`
     "age": 66,
     "avatarUrl": "头像URL"
   },
+  "rule": {
+    "deadline": "22:30",
+    "graceMinutes": 1440
+  },
   "guardians": [
     { "id": "守护人 openid", "nickname": "昵称", "avatarUrl": "头像URL", "acceptedAt": 1760000000000 }
   ]
@@ -78,6 +82,10 @@ Base URL：`https://api.sidhu.net.cn`
     "gender": "",
     "age": null,
     "avatarUrl": ""
+  },
+  "rule": {
+    "deadline": "22:30",
+    "graceMinutes": 1440
   },
   "guardians": []
 }
