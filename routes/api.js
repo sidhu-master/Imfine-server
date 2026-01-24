@@ -35,6 +35,44 @@ const registerApiRoutes = (
     return "";
   };
 
+  const extractUnionid = (data) => {
+    if (!data || typeof data !== "object") return "";
+    const v =
+      data.unionid != null
+        ? data.unionid
+        : data.unionId != null
+          ? data.unionId
+          : data.union_id != null
+            ? data.union_id
+            : "";
+    return v != null ? String(v) : "";
+  };
+
+  const extractOpenid = (data) => {
+    if (!data || typeof data !== "object") return "";
+    const v =
+      data.openid != null
+        ? data.openid
+        : data.openId != null
+          ? data.openId
+          : data.open_id != null
+            ? data.open_id
+            : "";
+    return v != null ? String(v) : "";
+  };
+
+  const updateUserUnionid = async (db, openid, unionid) => {
+    const now = new Date();
+    await db.collection("wy_users").updateOne(
+      { _id: openid },
+      {
+        $set: { openid, unionid, unionidUpdatedAt: now, updatedAt: now },
+        $setOnInsert: { createdAt: now },
+      },
+      { upsert: true }
+    );
+  };
+
   const normalizeBase64Image = (raw) => {
     const s = raw == null ? "" : String(raw).trim();
     if (!s) return { base64: "", contentTypeHint: "" };
@@ -59,6 +97,18 @@ const registerApiRoutes = (
     asyncHandler(async (req, res) => {
       const code = req.body && req.body.code ? String(req.body.code) : "";
       if (!code) return res.status(400).json({ ok: false, error: "missing code" });
+      const encryptedData =
+        req.body && req.body.encryptedData != null
+          ? String(req.body.encryptedData)
+          : req.body && req.body.encrypted_data != null
+            ? String(req.body.encrypted_data)
+            : "";
+      const iv =
+        req.body && req.body.iv != null
+          ? String(req.body.iv)
+          : req.body && req.body.iv_b64 != null
+            ? String(req.body.iv_b64)
+            : "";
 
       const mockOpenid = getEnv("WX_LOGIN_MOCK_OPENID");
       if (mockOpenid) {
@@ -96,9 +146,76 @@ const registerApiRoutes = (
         });
       }
 
+      let unionid = r.unionid || "";
+      if (encryptedData && iv) {
+        const decrypted = wx.decryptMiniData({ sessionKey: r.sessionKey, encryptedData, iv });
+        if (!decrypted.ok) return res.status(400).json({ ok: false, error: "decrypt failed" });
+        const payload = decrypted.data || {};
+        const decryptedOpenid = extractOpenid(payload);
+        if (decryptedOpenid && decryptedOpenid !== r.openid) {
+          return res.status(400).json({ ok: false, error: "openid mismatch" });
+        }
+        const decryptedUnionid = extractUnionid(payload);
+        if (!decryptedUnionid) return res.status(400).json({ ok: false, error: "missing unionid" });
+        unionid = decryptedUnionid;
+      }
+      if (unionid) {
+        await updateUserUnionid(db, r.openid, unionid);
+        console.log("[wx_unionid] bound", { openid: r.openid, unionid });
+      }
+
       const secret = requireEnv("API_JWT_SECRET");
       const token = jwt.sign({ openid: r.openid }, secret, { algorithm: "HS256", expiresIn: "30d" });
       return res.json({ ok: true, openid: r.openid, token });
+    })
+  );
+
+  app.post(
+    "/api/wxUnionid",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const code = req.body && req.body.code ? String(req.body.code) : "";
+      if (!code) return res.status(400).json({ ok: false, error: "missing code" });
+      const encryptedData =
+        req.body && req.body.encryptedData != null
+          ? String(req.body.encryptedData)
+          : req.body && req.body.encrypted_data != null
+            ? String(req.body.encrypted_data)
+            : "";
+      const iv =
+        req.body && req.body.iv != null
+          ? String(req.body.iv)
+          : req.body && req.body.iv_b64 != null
+            ? String(req.body.iv_b64)
+            : "";
+      if (!encryptedData || !iv) return res.status(400).json({ ok: false, error: "missing encrypted data" });
+
+      const db = await getDb();
+      const wx = createWeChatClient({ db, getEnv });
+      const r = await wx.jscode2session({ code });
+      if (!r.ok) return res.status(502).json({ ok: false, error: r.error || "jscode2session failed" });
+
+      const openid = r.openid || "";
+      if (!openid) return res.status(502).json({ ok: false, error: "missing openid" });
+      const authOpenid = req.user && req.user.openid ? String(req.user.openid) : "";
+      if (authOpenid && openid !== authOpenid) return res.status(400).json({ ok: false, error: "openid mismatch" });
+
+      let unionid = r.unionid || "";
+      const decrypted = wx.decryptMiniData({ sessionKey: r.sessionKey, encryptedData, iv });
+      if (!decrypted.ok) return res.status(400).json({ ok: false, error: "decrypt failed" });
+      const payload = decrypted.data || {};
+      const decryptedOpenid = extractOpenid(payload);
+      if (decryptedOpenid && decryptedOpenid !== openid) {
+        return res.status(400).json({ ok: false, error: "openid mismatch" });
+      }
+      const decryptedUnionid = extractUnionid(payload);
+      if (!decryptedUnionid) return res.status(400).json({ ok: false, error: "missing unionid" });
+      unionid = decryptedUnionid || unionid;
+      if (!unionid) return res.status(502).json({ ok: false, error: "missing unionid" });
+
+      await updateUserUnionid(db, openid, unionid);
+      console.log("[wx_unionid] bound", { openid, unionid });
+      return res.json({ ok: true, openid, unionid });
     })
   );
 
