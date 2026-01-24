@@ -196,7 +196,11 @@ if (shouldLogHttp) {
   app.use((req, res, next) => {
     const p = typeof req.path === "string" ? req.path : "";
     const shouldLogPath =
-      Boolean(p) && !p.startsWith("/health") && !p.startsWith("/__dev_files/") && !p.startsWith("/__db_files/");
+      Boolean(p) &&
+      !p.startsWith("/health") &&
+      !p.startsWith("/__dev_files/") &&
+      !p.startsWith("/__db_files/") &&
+      !p.startsWith("/internal/logStream");
     if (!shouldLogPath) return next();
 
     const reqId = crypto.randomBytes(6).toString("hex");

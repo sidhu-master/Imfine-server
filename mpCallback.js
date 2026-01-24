@@ -140,8 +140,11 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
         msgType,
         event,
         fromUser,
+        eventKey,
         scene,
         hasTicket: Boolean(ticket),
+        ip: (meta && meta.ip) || "",
+        ua: (meta && meta.ua) || "",
       });
       if (scene.startsWith("wy_b_") && deps && deps.db && deps.wx) {
         const db = deps.db;
@@ -151,6 +154,10 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
         const bindScene = await bindScenes.findOne({ _id: scene });
         if (bindScene && bindScene.elderOpenid) {
           const now = new Date();
+          const alreadyUsed = Boolean(bindScene.usedAt);
+          const alreadySentCard = Boolean(bindScene.sendCardOk);
+          const shouldSendCard = !alreadyUsed || !alreadySentCard;
+
           await links.updateOne(
             { _id: `${bindScene.elderOpenid}__${fromUser}` },
             {
@@ -170,11 +177,27 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
             { _id: scene },
             {
               $set: {
-                usedAt: now,
+                ...(alreadyUsed ? {} : { usedAt: now }),
                 lastGuardianMpOpenid: fromUser,
               },
             }
           );
+
+          logInfo({
+            tag: "mpCallback",
+            reqId,
+            method,
+            ok: true,
+            action: "bind_scene_resolved",
+            fromUser,
+            scene,
+            elderOpenid: bindScene.elderOpenid,
+            alreadyUsed,
+            alreadySentCard,
+            shouldSendCard,
+          });
+
+          if (!shouldSendCard) return { statusCode: 200, body: "success" };
 
           const title = process.env.MP_BIND_MINIPROGRAM_CARD_TITLE || "点击进入小程序完成绑定";
           const inviterId = bindScene && bindScene.inviterId != null ? String(bindScene.inviterId) : "";

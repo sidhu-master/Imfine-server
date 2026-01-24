@@ -4,6 +4,28 @@ const registerApiRoutes = (
   app,
   { asyncHandler, requireAuth, getDb, getShanghaiParts, randomId, createWeChatClient, uploadToCos, getEnv, requireEnv }
 ) => {
+  const getPublicBaseUrlFromReq = (req) => {
+    const forwardedProto = (req.headers["x-forwarded-proto"] || "").toString().split(",")[0].trim().toLowerCase();
+    const proto = forwardedProto || (req.secure ? "https" : "http");
+    const forwardedHost = (req.headers["x-forwarded-host"] || "").toString().split(",")[0].trim();
+    const host = forwardedHost || (req.headers.host || "").toString().split(",")[0].trim();
+    if (!host) return "";
+    if (proto !== "http" && proto !== "https") return "";
+    return `${proto}://${host}`;
+  };
+
+  const rewriteLocalhostFileUrl = (url, req) => {
+    const u = url == null ? "" : String(url);
+    if (!u) return "";
+    const base = getPublicBaseUrlFromReq(req);
+    if (!base) return u;
+    const m = /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)?(\/__db_files\/.+)$/.exec(u);
+    if (!m) return u;
+    const path = m[4] || "";
+    if (!path) return u;
+    return `${base}${path}`;
+  };
+
   const normalizeGender = (raw) => {
     const s = String(raw == null ? "" : raw).trim().toLowerCase();
     if (!s) return "";
@@ -332,7 +354,9 @@ const registerApiRoutes = (
       if (!img.ok) return res.status(502).json({ ok: false, error: img.error });
 
       const key = `invite_wxacode/${sceneId}.png`;
-      const imageUrl = await uploadToCos({ key, buffer: img.buffer, contentType: "image/png" });
+      const imageUrlRaw = await uploadToCos({ key, buffer: img.buffer, contentType: "image/png" });
+      const imageUrl = rewriteLocalhostFileUrl(imageUrlRaw, req);
+      if (!imageUrl) throw new Error("imageUrl empty");
 
       return res.json({ ok: true, sceneId, imageUrl });
     })
@@ -375,7 +399,9 @@ const registerApiRoutes = (
       if (!qr.ok) return res.status(502).json({ ok: false, error: qr.error });
 
       const key = `bind_mpqr/${scene}.png`;
-      const imageUrl = await uploadToCos({ key, buffer: qr.buffer, contentType: "image/png" });
+      const imageUrlRaw = await uploadToCos({ key, buffer: qr.buffer, contentType: "image/png" });
+      const imageUrl = rewriteLocalhostFileUrl(imageUrlRaw, req);
+      if (!imageUrl) throw new Error("imageUrl empty");
 
       const cardParams = [
         `inviterId=${encodeURIComponent(inviterId)}`,
