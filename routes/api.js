@@ -146,22 +146,35 @@ const registerApiRoutes = (
         });
       }
 
+      console.log("[wx_unionid] jscode2session", {
+        openid: r.openid || "",
+        hasUnionid: !!(r.unionid || ""),
+        hasEncryptedData: !!(encryptedData && iv),
+      });
       let unionid = r.unionid || "";
       if (encryptedData && iv) {
         const decrypted = wx.decryptMiniData({ sessionKey: r.sessionKey, encryptedData, iv });
-        if (!decrypted.ok) return res.status(400).json({ ok: false, error: "decrypt failed" });
+        if (!decrypted.ok) {
+          console.log("[wx_unionid] decrypt_failed", { openid: r.openid || "" });
+          return res.status(400).json({ ok: false, error: "decrypt failed" });
+        }
         const payload = decrypted.data || {};
         const decryptedOpenid = extractOpenid(payload);
         if (decryptedOpenid && decryptedOpenid !== r.openid) {
           return res.status(400).json({ ok: false, error: "openid mismatch" });
         }
         const decryptedUnionid = extractUnionid(payload);
-        if (!decryptedUnionid) return res.status(400).json({ ok: false, error: "missing unionid" });
+        if (!decryptedUnionid) {
+          console.log("[wx_unionid] decrypt_missing_unionid", { openid: r.openid || "" });
+          return res.status(400).json({ ok: false, error: "missing unionid" });
+        }
         unionid = decryptedUnionid;
       }
       if (unionid) {
         await updateUserUnionid(db, r.openid, unionid);
         console.log("[wx_unionid] bound", { openid: r.openid, unionid });
+      } else {
+        console.log("[wx_unionid] missing_unionid", { openid: r.openid || "" });
       }
 
       const secret = requireEnv("API_JWT_SECRET");
@@ -200,16 +213,27 @@ const registerApiRoutes = (
       const authOpenid = req.user && req.user.openid ? String(req.user.openid) : "";
       if (authOpenid && openid !== authOpenid) return res.status(400).json({ ok: false, error: "openid mismatch" });
 
+      console.log("[wx_unionid] jscode2session", {
+        openid,
+        hasUnionid: !!(r.unionid || ""),
+        hasEncryptedData: true,
+      });
       let unionid = r.unionid || "";
       const decrypted = wx.decryptMiniData({ sessionKey: r.sessionKey, encryptedData, iv });
-      if (!decrypted.ok) return res.status(400).json({ ok: false, error: "decrypt failed" });
+      if (!decrypted.ok) {
+        console.log("[wx_unionid] decrypt_failed", { openid });
+        return res.status(400).json({ ok: false, error: "decrypt failed" });
+      }
       const payload = decrypted.data || {};
       const decryptedOpenid = extractOpenid(payload);
       if (decryptedOpenid && decryptedOpenid !== openid) {
         return res.status(400).json({ ok: false, error: "openid mismatch" });
       }
       const decryptedUnionid = extractUnionid(payload);
-      if (!decryptedUnionid) return res.status(400).json({ ok: false, error: "missing unionid" });
+      if (!decryptedUnionid) {
+        console.log("[wx_unionid] decrypt_missing_unionid", { openid });
+        return res.status(400).json({ ok: false, error: "missing unionid" });
+      }
       unionid = decryptedUnionid || unionid;
       if (!unionid) return res.status(502).json({ ok: false, error: "missing unionid" });
 
