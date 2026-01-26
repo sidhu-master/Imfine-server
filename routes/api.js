@@ -426,6 +426,80 @@ const registerApiRoutes = (
     })
   );
 
+  app.get(
+    "/api/guardian/overview",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const db = await getDb();
+      const openid = req.user && req.user.openid != null ? String(req.user.openid) : "";
+      if (!openid) return res.status(401).json({ ok: false, error: "invalid token" });
+
+      const links = await db.collection("wy_guardian_mini_links").find({ inviteeOpenid: openid }).limit(200).toArray();
+      const { dateKey } = getShanghaiParts();
+
+      const isOpenidLike = (value) => {
+        const s = String(value == null ? "" : value).trim();
+        if (!s) return false;
+        if (s.length < 20 || s.length > 64) return false;
+        return /^o[0-9A-Za-z_-]+$/.test(s);
+      };
+
+      const inviterOpenids = [
+        ...new Set(
+          links
+            .map((d) => {
+              const inviterOpenid = String(d && d.inviterOpenid != null ? d.inviterOpenid : "").trim();
+              if (inviterOpenid) return inviterOpenid;
+              const inviterId = String(d && d.inviterId != null ? d.inviterId : "").trim();
+              return isOpenidLike(inviterId) ? inviterId : "";
+            })
+            .filter(Boolean)
+        ),
+      ];
+      const checkinIds = inviterOpenids.map((id) => `${id}_${dateKey}`);
+      const checkins = checkinIds.length ? await db.collection("wy_checkins").find({ _id: { $in: checkinIds } }).toArray() : [];
+      const users = inviterOpenids.length ? await db.collection("wy_users").find({ _id: { $in: inviterOpenids } }).toArray() : [];
+
+      const checkinMap = new Map(checkins.map((c) => [String(c && c._id != null ? c._id : ""), c]));
+      const userMap = new Map(users.map((u) => [String(u && u._id != null ? u._id : ""), u]));
+
+      const guardees = links.map((link, index) => {
+        const inviterOpenid = String(link && link.inviterOpenid != null ? link.inviterOpenid : "").trim();
+        const inviterId = String(link && link.inviterId != null ? link.inviterId : "").trim();
+        const inviterName = String(link && link.inviterName != null ? link.inviterName : "").trim();
+        const resolvedOpenid = inviterOpenid || (isOpenidLike(inviterId) ? inviterId : "");
+        const user = resolvedOpenid ? userMap.get(resolvedOpenid) : null;
+        const avatarUrl = user && user.avatarUrl != null ? String(user.avatarUrl) : "";
+        const checkin = resolvedOpenid ? checkinMap.get(`${resolvedOpenid}_${dateKey}`) : null;
+        const timeText = checkin && checkin.timeText != null ? String(checkin.timeText) : "";
+        const checkedIn = Boolean(checkin);
+        const status = checkedIn ? "ok" : "alert";
+        const statusText = checkedIn ? (timeText ? `已报平安 ${timeText}` : "已报平安") : "今日尚未打卡";
+        return {
+          id: resolvedOpenid || inviterId || String(index),
+          inviterId,
+          inviterName,
+          inviterOpenid: resolvedOpenid,
+          avatarUrl,
+          status,
+          statusText,
+          checkedIn,
+          timeText,
+        };
+      });
+
+      let safeCount = 0;
+      let pendingCount = 0;
+      for (const item of guardees) {
+        const status = item && item.status ? String(item.status) : "";
+        if (status === "alert") pendingCount += 1;
+        else safeCount += 1;
+      }
+
+      return res.json({ ok: true, dateKey, guardees, safeCount, pendingCount });
+    })
+  );
+
   app.post(
     "/api/checkin",
     requireAuth,
