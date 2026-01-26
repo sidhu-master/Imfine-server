@@ -109,7 +109,7 @@ const registerToolsRoutes = (
       h2 { margin: 20px 0 10px; font-size: 15px; }
       .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       input, select, button, textarea { font: inherit; }
-      input[type="text"] { padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; min-width: 320px; }
+      input[type="text"], input[type="password"] { padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; min-width: 320px; }
       input.small { min-width: 120px; width: 120px; }
       button { padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; cursor: pointer; }
       button:disabled { opacity: .6; cursor: not-allowed; }
@@ -225,6 +225,30 @@ const registerToolsRoutes = (
           <pre id="dbOut" class="mono"></pre>
         </div>
       </div>
+      <div class="card grid">
+        <div class="row">
+          <div style="min-width:90px;color:#b42318">危险操作</div>
+          <div class="muted">清空 Mongo 的所有业务集合数据（不会 drop 索引）</div>
+        </div>
+        <div class="row">
+          <div class="muted" style="min-width:60px">dbName</div>
+          <input id="dbClearDbName" class="small mono" type="text" placeholder="imfine" />
+          <div class="muted" style="min-width:60px">confirm</div>
+          <input id="dbClearConfirm" class="small mono" type="text" placeholder="DELETE_imfine" />
+          <button id="dbClearRun">清空</button>
+          <span id="dbClearStatus" class="muted"></span>
+        </div>
+        <div class="row">
+          <div class="muted" style="min-width:60px">uri</div>
+          <input id="dbClearUri" type="password" placeholder="mongodb://user:pass@host:27017/?authSource=..." />
+          <label class="muted" style="display:flex;align-items:center;gap:6px">
+            <input id="dbClearShowUri" type="checkbox" />
+            显示
+          </label>
+        </div>
+        <pre id="dbClearOut" class="mono"></pre>
+        <div class="muted">confirm 规则：DELETE_&lt;dbName&gt;（区分大小写）</div>
+      </div>
     </div>
 
     <h2>守护关系</h2>
@@ -242,10 +266,12 @@ const registerToolsRoutes = (
           <thead>
             <tr>
               <th>elderOpenid</th>
+              <th>guardianOpenid</th>
               <th>guardianMpOpenid</th>
-              <th>scene</th>
+              <th>miniRelationId</th>
+              <th>acceptedAt</th>
+              <th>mpScene</th>
               <th>updatedAt</th>
-              <th>createdAt</th>
               <th>op</th>
             </tr>
           </thead>
@@ -272,34 +298,6 @@ const registerToolsRoutes = (
           style="padding:8px 10px;border:1px solid #ddd;border-radius:10px"
         ></textarea>
       </div>
-
-      <div class="card">
-        <div class="row" style="margin-bottom:8px">
-          <div class="muted" style="min-width:140px">小程序邀请关系</div>
-          <button id="miniGuardianLoad">加载</button>
-          <span id="miniGuardianStatus" class="muted"></span>
-        </div>
-        <div class="row" style="margin-bottom:8px">
-          <div class="muted" style="min-width:140px">按 relationId 解除</div>
-          <input id="miniGuardianUnbindId" type="text" placeholder="例如：inviterOpenid__inviteeOpenid" />
-          <button id="miniGuardianUnbind">解除</button>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>relationId</th>
-              <th>inviterOpenid</th>
-              <th>inviteeOpenid</th>
-              <th>inviterName</th>
-              <th>inviteeName</th>
-              <th>sceneId</th>
-              <th>acceptedAt</th>
-              <th>op</th>
-            </tr>
-          </thead>
-          <tbody id="miniGuardianBody"></tbody>
-        </table>
-      </div>
     </div>
 
     <h2>实时日志</h2>
@@ -308,6 +306,8 @@ const registerToolsRoutes = (
         <button id="logStart">开始</button>
         <button id="logStop" disabled>停止</button>
         <button id="logClear">清空</button>
+        <button id="logPresetUnionid" title="过滤 wx_unionid 相关日志">wx_unionid</button>
+        <button id="logPresetAll" title="清空过滤条件">全部</button>
         <input id="logFilter" type="text" placeholder="过滤关键字（可选）" />
         <span id="logStatus" class="muted"></span>
       </div>
@@ -601,6 +601,45 @@ const registerToolsRoutes = (
         }
       };
 
+      const syncDbClearConfirmPlaceholder = () => {
+        const name = ($("dbClearDbName").value || "").trim();
+        $("dbClearConfirm").placeholder = name ? ("DELETE_" + name) : "DELETE_imfine";
+      };
+
+      $("dbClearDbName").addEventListener("input", syncDbClearConfirmPlaceholder);
+      $("dbClearShowUri").addEventListener("change", () => {
+        $("dbClearUri").type = $("dbClearShowUri").checked ? "text" : "password";
+      });
+
+      $("dbClearRun").onclick = async () => {
+        $("dbClearStatus").textContent = "清空中...";
+        $("dbClearStatus").classList.remove("error");
+        try {
+          const uri = $("dbClearUri").value || "";
+          const dbName = ($("dbClearDbName").value || "").trim();
+          const confirmText = ($("dbClearConfirm").value || "").trim();
+          if (!uri.trim()) throw new Error("缺少 uri");
+          if (!dbName) throw new Error("缺少 dbName");
+          const expected = "DELETE_" + dbName;
+          if (confirmText !== expected) throw new Error("confirm 不匹配，应该是：" + expected);
+          const ok = confirm("确认清空数据库 " + dbName + " 的所有集合数据？此操作不可恢复。");
+          if (!ok) {
+            $("dbClearStatus").textContent = "";
+            return;
+          }
+          const j = await fetchJson("/internal/dbClearWithMongo", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ uri, dbName, confirm: confirmText }),
+          });
+          $("dbClearOut").textContent = JSON.stringify(j, null, 2);
+          $("dbClearStatus").textContent = "ok";
+        } catch (e) {
+          $("dbClearStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
+          $("dbClearStatus").classList.add("error");
+        }
+      };
+
       const loadGuardianLinks = async () => {
         $("guardianStatus").textContent = "加载中...";
         $("guardianStatus").classList.remove("error");
@@ -610,33 +649,108 @@ const registerToolsRoutes = (
           const limit = $("guardianLimit").value || "50";
           if (q) qs.set("q", q);
           qs.set("limit", limit);
-          const j = await fetchJson("/internal/listGuardianLinks?" + qs.toString());
+          const [mp, mini] = await Promise.all([
+            fetchJson("/internal/listGuardianLinks?" + qs.toString()),
+            fetchJson("/internal/listMiniGuardianLinks?" + qs.toString()),
+          ]);
+
+          const getMs = (v) => {
+            if (!v) return 0;
+            const t = new Date(v).getTime();
+            return Number.isFinite(t) ? t : 0;
+          };
+
+          const map = new Map();
+
+          for (const it of (mini.items || [])) {
+            const elderOpenid = it.inviterOpenid || "";
+            const guardianOpenid = it.inviteeOpenid || "";
+            const guardianMpOpenid = it.inviteeMpOpenid || "";
+            const key = guardianMpOpenid ? (elderOpenid + "__" + guardianMpOpenid) : (elderOpenid + "__" + guardianOpenid);
+            const existing = map.get(key) || {};
+            const merged = {
+              ...existing,
+              key,
+              elderOpenid,
+              guardianOpenid,
+              guardianMpOpenid,
+              miniId: it.id || "",
+              acceptedAt: it.acceptedAt || null,
+              miniUpdatedAt: it.updatedAt || null,
+            };
+            merged.updatedAtMs = Math.max(
+              existing.updatedAtMs || 0,
+              getMs(merged.acceptedAt),
+              getMs(merged.miniUpdatedAt)
+            );
+            map.set(key, merged);
+          }
+
+          for (const it of (mp.items || [])) {
+            const elderOpenid = it.elderOpenid || "";
+            const guardianMpOpenid = it.guardianMpOpenid || "";
+            if (!elderOpenid || !guardianMpOpenid) continue;
+            const key = elderOpenid + "__" + guardianMpOpenid;
+            const existing = map.get(key) || {};
+            const merged = {
+              ...existing,
+              key,
+              elderOpenid,
+              guardianOpenid: existing.guardianOpenid || it.guardianOpenid || "",
+              guardianMpOpenid,
+              mpId: it.id || "",
+              mpScene: it.scene || "",
+              mpUpdatedAt: it.updatedAt || null,
+            };
+            merged.updatedAtMs = Math.max(
+              existing.updatedAtMs || 0,
+              getMs(merged.mpUpdatedAt)
+            );
+            map.set(key, merged);
+          }
+
+          const items = [...map.values()].sort((a, b) => (b.updatedAtMs || 0) - (a.updatedAtMs || 0));
 
           $("guardianBody").innerHTML = "";
-          for (const it of (j.items || [])) {
+          for (const it of items) {
             const tr = document.createElement("tr");
             tr.style.cursor = "pointer";
-            tr.innerHTML = "<td class='mono'></td><td class='mono'></td><td class='mono'></td><td class='mono'></td><td class='mono'></td><td></td>";
+            tr.innerHTML =
+              "<td class='mono'></td><td class='mono'></td><td class='mono'></td><td class='mono'></td><td class='mono'></td><td class='mono'></td><td class='mono'></td><td></td>";
             tr.children[0].textContent = it.elderOpenid || "";
-            tr.children[1].textContent = it.guardianMpOpenid || "";
-            tr.children[2].textContent = it.scene || "";
-            tr.children[3].textContent = fmtTs(it.updatedAt);
-            tr.children[4].textContent = fmtTs(it.createdAt);
+            tr.children[1].textContent = it.guardianOpenid || "";
+            tr.children[2].textContent = it.guardianMpOpenid || "";
+            tr.children[3].textContent = it.miniId || "";
+            tr.children[4].textContent = fmtTs(it.acceptedAt);
+            tr.children[5].textContent = it.mpScene || "";
+            tr.children[6].textContent = it.updatedAtMs ? fmtTs(it.updatedAtMs) : "";
+
             const btn = document.createElement("button");
             btn.textContent = "解除";
             btn.onclick = async (ev) => {
               ev.preventDefault();
               ev.stopPropagation();
-              const ok = confirm("确认解除这条绑定关系？");
+              const ok = confirm("确认解除这条绑定关系？（会同时解除小程序/公众号两侧）");
               if (!ok) return;
               $("guardianStatus").textContent = "解除中...";
               $("guardianStatus").classList.remove("error");
               try {
-                await fetchJson("/internal/unbindGuardianLink", {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ id: it.id || "" }),
-                });
+                const tasks = [];
+                if (it.miniId) {
+                  tasks.push(fetchJson("/internal/unbindMiniGuardianLink", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ id: it.miniId }),
+                  }));
+                }
+                if (it.mpId) {
+                  tasks.push(fetchJson("/internal/unbindGuardianLink", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ id: it.mpId }),
+                  }));
+                }
+                await Promise.all(tasks);
                 tr.remove();
                 const left = $("guardianBody").querySelectorAll("tr").length;
                 $("guardianStatus").textContent = "ok (" + String(left) + ")";
@@ -645,82 +759,26 @@ const registerToolsRoutes = (
                 $("guardianStatus").classList.add("error");
               }
             };
-            tr.children[5].appendChild(btn);
+            tr.children[7].appendChild(btn);
+
             tr.onclick = () => {
               $("guardianTestKind").value = "guardian";
               $("guardianToUser").value = it.guardianMpOpenid || "";
               if (!$("guardianRemark").value.trim()) $("guardianRemark").value = "";
             };
+
             $("guardianBody").appendChild(tr);
           }
 
-          $("guardianStatus").textContent = "ok (" + String(j.count || (j.items || []).length || 0) + ")";
+          $("guardianStatus").textContent = "ok (" + String(items.length) + ")";
         } catch (e) {
           $("guardianStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
           $("guardianStatus").classList.add("error");
         }
       };
 
-      const loadMiniGuardianLinks = async () => {
-        $("miniGuardianStatus").textContent = "加载中...";
-        $("miniGuardianStatus").classList.remove("error");
-        try {
-          const qs = new URLSearchParams();
-          const q = ($("guardianQ").value || "").trim();
-          const limit = $("guardianLimit").value || "50";
-          if (q) qs.set("q", q);
-          qs.set("limit", limit);
-          const j = await fetchJson("/internal/listMiniGuardianLinks?" + qs.toString());
-
-          $("miniGuardianBody").innerHTML = "";
-          for (const it of (j.items || [])) {
-            const tr = document.createElement("tr");
-            tr.innerHTML =
-              "<td class='mono'></td><td class='mono'></td><td class='mono'></td><td></td><td></td><td class='mono'></td><td class='mono'></td><td></td>";
-            tr.children[0].textContent = it.id || "";
-            tr.children[1].textContent = it.inviterOpenid || "";
-            tr.children[2].textContent = it.inviteeOpenid || "";
-            tr.children[3].textContent = it.inviterName || "";
-            tr.children[4].textContent = it.inviteeName || "";
-            tr.children[5].textContent = it.sceneId || "";
-            tr.children[6].textContent = fmtTs(it.acceptedAt);
-            const btn = document.createElement("button");
-            btn.textContent = "解除";
-            btn.onclick = async (ev) => {
-              ev.preventDefault();
-              ev.stopPropagation();
-              const ok = confirm("确认解除这条小程序邀请关系？");
-              if (!ok) return;
-              $("miniGuardianStatus").textContent = "解除中...";
-              $("miniGuardianStatus").classList.remove("error");
-              try {
-                await fetchJson("/internal/unbindMiniGuardianLink", {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ id: it.id || "" }),
-                });
-                tr.remove();
-                const left = $("miniGuardianBody").querySelectorAll("tr").length;
-                $("miniGuardianStatus").textContent = "ok (" + String(left) + ")";
-              } catch (e) {
-                $("miniGuardianStatus").textContent = "解除失败：" + (e && e.message ? e.message : "unknown");
-                $("miniGuardianStatus").classList.add("error");
-              }
-            };
-            tr.children[7].appendChild(btn);
-            $("miniGuardianBody").appendChild(tr);
-          }
-
-          $("miniGuardianStatus").textContent = "ok (" + String(j.count || (j.items || []).length || 0) + ")";
-        } catch (e) {
-          $("miniGuardianStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
-          $("miniGuardianStatus").classList.add("error");
-        }
-      };
-
       $("guardianLoad").onclick = async () => {
         await loadGuardianLinks();
-        await loadMiniGuardianLinks();
       };
 
       $("guardianSend").onclick = async () => {
@@ -741,32 +799,6 @@ const registerToolsRoutes = (
         } catch (e) {
           $("guardianSendStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
           $("guardianSendStatus").classList.add("error");
-        }
-      };
-
-      $("miniGuardianLoad").onclick = loadMiniGuardianLinks;
-
-      $("miniGuardianUnbind").onclick = async () => {
-        $("miniGuardianStatus").textContent = "解除中...";
-        $("miniGuardianStatus").classList.remove("error");
-        try {
-          const id = ($("miniGuardianUnbindId").value || "").trim();
-          if (!id) throw new Error("请输入 relationId");
-          const ok = confirm("确认解除这条小程序邀请关系？");
-          if (!ok) {
-            $("miniGuardianStatus").textContent = "";
-            return;
-          }
-          await fetchJson("/internal/unbindMiniGuardianLink", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ id }),
-          });
-          $("miniGuardianStatus").textContent = "ok";
-          $("miniGuardianUnbindId").value = "";
-        } catch (e) {
-          $("miniGuardianStatus").textContent = "解除失败：" + (e && e.message ? e.message : "unknown");
-          $("miniGuardianStatus").classList.add("error");
         }
       };
 
@@ -886,9 +918,17 @@ const registerToolsRoutes = (
         logEntries = [];
       };
 
+      const setLogFilter = (value) => {
+        $("logFilter").value = value == null ? "" : String(value);
+        $("logBox").innerHTML = "";
+        for (const e of logEntries) renderLogEntry(e);
+      };
+
       $("logStart").onclick = startLogs;
       $("logStop").onclick = stopLogs;
       $("logClear").onclick = clearLogs;
+      $("logPresetUnionid").onclick = () => setLogFilter("[wx_unionid]");
+      $("logPresetAll").onclick = () => setLogFilter("");
       $("logFilter").addEventListener("input", () => {
         $("logBox").innerHTML = "";
         for (const e of logEntries) renderLogEntry(e);
@@ -898,6 +938,7 @@ const registerToolsRoutes = (
         $("toolsShowPw").addEventListener("change", () => {
           $("toolsPassword").type = $("toolsShowPw").checked ? "text" : "password";
         });
+        syncDbClearConfirmPlaceholder();
         checkAuth();
       };
       init();

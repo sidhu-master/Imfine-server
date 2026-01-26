@@ -149,29 +149,47 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
       if (scene.startsWith("wy_b_") && deps && deps.db && deps.wx) {
         const db = deps.db;
         const bindScenes = db.collection("wy_guardian_bind_scenes");
-        const links = db.collection("wy_guardian_links");
 
         const bindScene = await bindScenes.findOne({ _id: scene });
         if (bindScene && bindScene.elderOpenid) {
           const now = new Date();
+          const elderOpenid = String(bindScene.elderOpenid || "");
+          console.log("[wx_unionid] mp_bind_scene_loaded", { reqId, scene, elderOpenid, fromUser });
+
+          const same = await deps.wx.isSameUserByElderAndMpOpenid({
+            elderOpenid,
+            mpOpenid: fromUser,
+            now,
+          });
+          console.log("[wx_unionid] same_user_check", {
+            reqId,
+            scene,
+            elderOpenid,
+            fromUser,
+            ok: Boolean(same && same.ok),
+            same: Boolean(same && same.ok && same.same),
+            reason: same && same.ok && same.reason ? String(same.reason) : "",
+            userOpenid: same && same.ok && same.userOpenid ? String(same.userOpenid) : "",
+            error: same && !same.ok && same.error ? String(same.error) : "",
+          });
+          if (same && same.ok && same.same) {
+            logInfo({
+              tag: "mpCallback",
+              reqId,
+              method,
+              ok: true,
+              action: "same_user_skip_send",
+              fromUser,
+              scene,
+              elderOpenid,
+              reason: same && same.reason ? String(same.reason) : "",
+            });
+            return { statusCode: 200, body: "success" };
+          }
+
           const alreadyUsed = Boolean(bindScene.usedAt);
           const alreadySentCard = Boolean(bindScene.sendCardOk);
           const shouldSendCard = !alreadyUsed || !alreadySentCard;
-
-          await links.updateOne(
-            { _id: `${bindScene.elderOpenid}__${fromUser}` },
-            {
-              $set: {
-                elderOpenid: bindScene.elderOpenid,
-                guardianMpOpenid: fromUser,
-                scene,
-                ticket,
-                updatedAt: now,
-              },
-              $setOnInsert: { createdAt: now },
-            },
-            { upsert: true }
-          );
 
           await bindScenes.updateOne(
             { _id: scene },

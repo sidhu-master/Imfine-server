@@ -251,16 +251,16 @@ const registerApiRoutes = (
       const openid = req.user && req.user.openid ? String(req.user.openid) : "";
       if (!openid) return res.status(401).json({ ok: false, error: "invalid token" });
       const doc = await db.collection("wy_users").findOne({ _id: openid });
-      const links = await db.collection("wy_guardian_mini_links").find({ inviterOpenid: openid }).limit(200).toArray();
+      const links = await db.collection("wy_guardian_relations").find({ elderOpenid: openid }).limit(200).toArray();
       const guardians = [...new Map(
         (links || [])
-          .filter((d) => d && d.inviteeOpenid)
+          .filter((d) => d && d.guardianOpenid)
           .map((d) => [
-            String(d.inviteeOpenid),
+            String(d.guardianOpenid),
             {
-              id: String(d.inviteeOpenid),
-              nickname: d.inviteeName != null ? String(d.inviteeName) : "",
-              avatarUrl: d.inviteeAvatarUrl != null ? String(d.inviteeAvatarUrl) : "",
+              id: String(d.guardianOpenid),
+              nickname: d.guardianName != null ? String(d.guardianName) : "",
+              avatarUrl: d.guardianAvatarUrl != null ? String(d.guardianAvatarUrl) : "",
               acceptedAt: d.acceptedAt ? new Date(d.acceptedAt).getTime() : null,
             },
           ])
@@ -385,16 +385,16 @@ const registerApiRoutes = (
       );
 
       const doc = await db.collection("wy_users").findOne({ _id: openid });
-      const links = await db.collection("wy_guardian_mini_links").find({ inviterOpenid: openid }).limit(200).toArray();
+      const links = await db.collection("wy_guardian_relations").find({ elderOpenid: openid }).limit(200).toArray();
       const guardians = [...new Map(
         (links || [])
-          .filter((d) => d && d.inviteeOpenid)
+          .filter((d) => d && d.guardianOpenid)
           .map((d) => [
-            String(d.inviteeOpenid),
+            String(d.guardianOpenid),
             {
-              id: String(d.inviteeOpenid),
-              nickname: d.inviteeName != null ? String(d.inviteeName) : "",
-              avatarUrl: d.inviteeAvatarUrl != null ? String(d.inviteeAvatarUrl) : "",
+              id: String(d.guardianOpenid),
+              nickname: d.guardianName != null ? String(d.guardianName) : "",
+              avatarUrl: d.guardianAvatarUrl != null ? String(d.guardianAvatarUrl) : "",
               acceptedAt: d.acceptedAt ? new Date(d.acceptedAt).getTime() : null,
             },
           ])
@@ -662,20 +662,33 @@ const registerApiRoutes = (
       if (!code) return res.status(400).json({ ok: false, error: "missing code" });
 
       const sceneIdRaw = req.body && req.body.sceneId != null ? String(req.body.sceneId) : "";
-      const sceneId = sceneIdRaw ? sceneIdRaw.trim() : "";
+      const bindSceneRaw = req.body && req.body.bindScene != null ? String(req.body.bindScene) : "";
+      const sceneRaw = req.body && req.body.scene != null ? String(req.body.scene) : "";
 
-      const bindSceneRaw =
-        req.body && req.body.bindScene != null
-          ? String(req.body.bindScene)
-          : req.body && req.body.scene != null
-            ? String(req.body.scene)
-            : "";
-      const bindScene = bindSceneRaw ? bindSceneRaw.trim() : "";
+      let sceneId = sceneIdRaw ? sceneIdRaw.trim() : "";
+      let bindScene = bindSceneRaw ? bindSceneRaw.trim() : "";
+      const scene = sceneRaw ? sceneRaw.trim() : "";
+
+      if (!sceneId && !bindScene && scene) {
+        if (scene.startsWith("wy_b_")) bindScene = scene;
+        else if (scene.startsWith("wy_i_")) sceneId = scene;
+      }
+      if (sceneId && !bindScene && sceneId.startsWith("wy_b_")) {
+        bindScene = sceneId;
+        sceneId = "";
+      }
+      if (bindScene && !sceneId && bindScene.startsWith("wy_i_")) {
+        sceneId = bindScene;
+        bindScene = "";
+      }
 
       const inviterIdRaw = req.body && req.body.inviterId != null ? String(req.body.inviterId) : "";
       const inviterNameRaw = req.body && req.body.inviterName != null ? String(req.body.inviterName) : "";
       const inviterIdFallback = inviterIdRaw ? inviterIdRaw.trim() : "";
       const inviterNameFallback = inviterNameRaw ? inviterNameRaw.trim() : "";
+
+      const inviterOpenidRaw = req.body && req.body.inviterOpenid != null ? String(req.body.inviterOpenid) : "";
+      const inviterOpenidInput = inviterOpenidRaw ? inviterOpenidRaw.trim() : "";
 
       const inviteeNameRaw = req.body && req.body.inviteeName != null ? String(req.body.inviteeName) : "";
       const inviteeAvatarUrlRaw = req.body && req.body.inviteeAvatarUrl != null ? String(req.body.inviteeAvatarUrl) : "";
@@ -730,15 +743,17 @@ const registerApiRoutes = (
 
       let inviterId = inviterIdFallback;
       let inviterName = inviterNameFallback;
-      let inviterOpenid = "";
+      let inviterOpenid = inviterOpenidInput;
       let resolvedSceneId = sceneId;
       let expireAt = null;
       let isExpired = false;
+      let bindSceneDoc = null;
 
       const bindSceneId = bindScene && bindScene.startsWith("wy_b_") ? bindScene : "";
       if (bindSceneId) {
         const doc = await db.collection("wy_guardian_bind_scenes").findOne({ _id: bindSceneId });
         if (!doc) return res.status(404).json({ ok: false, error: "scene not found", code: "BIND_SCENE_NOT_FOUND" });
+        bindSceneDoc = doc;
         inviterId = doc.inviterId || inviterId;
         inviterName = doc.inviterName || inviterName;
         inviterOpenid = doc.elderOpenid || "";
@@ -766,6 +781,17 @@ const registerApiRoutes = (
         }
       } else if (!inviterId || !inviterName) {
         return res.status(400).json({ ok: false, error: "missing inviter" });
+      }
+
+      const looksLikeOpenid = (s) => {
+        const t = String(s || "").trim();
+        if (!t) return false;
+        if (t.length < 20 || t.length > 40) return false;
+        return /^o[0-9a-zA-Z_-]+$/.test(t);
+      };
+
+      if (!inviterOpenid && inviterId && looksLikeOpenid(inviterId)) {
+        inviterOpenid = inviterId;
       }
 
       if (inviterOpenid && inviterOpenid === inviteeOpenid) {
@@ -799,71 +825,67 @@ const registerApiRoutes = (
         }
       }
 
-      const relationKey = inviterOpenid
-        ? `${inviterOpenid}__${inviteeOpenid}`
-        : inviterId
-          ? `inviterId_${inviterId}__${inviteeOpenid}`
-          : `${resolvedSceneId}__${inviteeOpenid}`;
-
-      const links = db.collection("wy_guardian_mini_links");
-      const existing = await links.findOne({ _id: relationKey });
-      if (existing) {
-        if (verifiedInviteeMpOpenid) {
-          const now = new Date();
-          await links.updateOne(
-            { _id: relationKey },
-            {
-              $set: {
-                inviteeMpOpenid: verifiedInviteeMpOpenid,
-                inviteeMpVerifiedAt: now,
-                updatedAt: now,
-              },
-            }
-          );
-        }
-        const acceptedAt = existing.acceptedAt ? new Date(existing.acceptedAt).getTime() : null;
-        const jwt = require("jsonwebtoken");
-        const secret = requireEnv("API_JWT_SECRET");
-        const token = jwt.sign({ openid: inviteeOpenid }, secret, { algorithm: "HS256", expiresIn: "30d" });
-        return res.json({
-          ok: true,
-          relationId: relationKey,
-          alreadyAccepted: true,
-          acceptedAt: Number.isFinite(acceptedAt) ? acceptedAt : null,
-          openid: inviteeOpenid,
-          token,
-        });
+      const elderOpenid = inviterOpenid ? String(inviterOpenid) : "";
+      if (!elderOpenid) {
+        return res.status(400).json({ ok: false, error: "missing inviterOpenid", code: "MISSING_INVITER_OPENID" });
       }
 
+      const relationId = `${elderOpenid}__${inviteeOpenid}`;
+      const relations = db.collection("wy_guardian_relations");
+      const existing = await relations.findOne({ _id: relationId });
+
       const now = new Date();
+      if (!verifiedInviteeMpOpenid && bindSceneId && bindSceneDoc) {
+        const candidate = bindSceneDoc.lastGuardianMpOpenid != null ? String(bindSceneDoc.lastGuardianMpOpenid).trim() : "";
+        if (candidate) {
+          try {
+            const r = await wx.resolveUserByMpOpenid({ mpOpenid: candidate, now });
+            const userOpenid = r && r.ok && r.userOpenid ? String(r.userOpenid) : "";
+            if (userOpenid && userOpenid === inviteeOpenid) {
+              verifiedInviteeMpOpenid = candidate;
+            }
+          } catch (_) {}
+        }
+      }
+      const existingAcceptedAtRaw = existing && existing.acceptedAt != null ? existing.acceptedAt : null;
+      const existingAcceptedAt = existingAcceptedAtRaw ? new Date(existingAcceptedAtRaw) : null;
+      const acceptedAt = existingAcceptedAt && Number.isFinite(existingAcceptedAt.getTime()) ? existingAcceptedAt : now;
+
+      const guardianNameExisting = existing && existing.guardianName != null ? String(existing.guardianName) : "";
+      const guardianAvatarExisting = existing && existing.guardianAvatarUrl != null ? String(existing.guardianAvatarUrl) : "";
+      const guardianName = inviteeName || guardianNameExisting;
+      const guardianAvatarUrl = inviteeAvatarUrl || guardianAvatarExisting;
+
       const set = {
-        inviterId,
-        inviterName,
-        inviterOpenid,
-        inviteeOpenid,
-        inviteeName,
-        inviteeAvatarUrl,
-        sceneId: resolvedSceneId || "",
+        elderOpenid,
+        guardianOpenid: inviteeOpenid,
+        guardianName,
+        guardianAvatarUrl,
+        inviterId: inviterId || "",
+        inviterName: inviterName || "",
+        scene: resolvedSceneId || "",
+        sceneType: bindSceneId ? "mp_bind" : sceneId ? "mini_invite" : "",
         channel: channel || "mini_landing",
         envVersion: envVersion || "",
         expireAt: Number.isFinite(expireAt) ? expireAt : null,
+        acceptedAt,
         updatedAt: now,
-        acceptedAt: now,
       };
       if (verifiedInviteeMpOpenid) {
-        set.inviteeMpOpenid = verifiedInviteeMpOpenid;
-        set.inviteeMpVerifiedAt = now;
+        set.guardianMpOpenid = verifiedInviteeMpOpenid;
+        set.guardianMpVerifiedAt = now;
       }
-      await links.updateOne(
-        { _id: relationKey },
+
+      await relations.updateOne(
+        { _id: relationId },
         {
-          $set: {
-            ...set,
-          },
+          $set: set,
           $setOnInsert: { createdAt: now },
         },
         { upsert: true }
       );
+
+      const acceptedAtMs = acceptedAt ? acceptedAt.getTime() : null;
 
       const jwt = require("jsonwebtoken");
       const secret = requireEnv("API_JWT_SECRET");
@@ -871,9 +893,9 @@ const registerApiRoutes = (
 
       return res.json({
         ok: true,
-        relationId: relationKey,
-        alreadyAccepted: false,
-        acceptedAt: now.getTime(),
+        relationId,
+        alreadyAccepted: Boolean(existing),
+        acceptedAt: Number.isFinite(acceptedAtMs) ? acceptedAtMs : null,
         openid: inviteeOpenid,
         token,
       });
@@ -896,23 +918,9 @@ const registerApiRoutes = (
       if (!guardianOpenid) return res.status(400).json({ ok: false, error: "missing guardianOpenid" });
       if (guardianOpenid === openid) return res.status(400).json({ ok: false, error: "invalid guardianOpenid" });
 
-      const links = db.collection("wy_guardian_mini_links");
-      const existing = await links
-        .find({ inviterOpenid: openid, inviteeOpenid: guardianOpenid })
-        .project({ inviteeMpOpenid: 1 })
-        .limit(20)
-        .toArray();
-
-      const del = await links.deleteMany({ inviterOpenid: openid, inviteeOpenid: guardianOpenid });
+      const relations = db.collection("wy_guardian_relations");
+      const del = await relations.deleteOne({ _id: `${openid}__${guardianOpenid}` });
       const removedCount = Number(del && del.deletedCount) || 0;
-
-      const mpOpenids = [...new Set((existing || []).map((d) => (d && d.inviteeMpOpenid != null ? String(d.inviteeMpOpenid) : "")).filter(Boolean))];
-      if (mpOpenids.length) {
-        const mpLinks = db.collection("wy_guardian_links");
-        await Promise.allSettled(
-          mpOpenids.map((mp) => mpLinks.deleteMany({ elderOpenid: openid, guardianMpOpenid: mp }))
-        );
-      }
 
       return res.json({ ok: true, removedCount });
     })

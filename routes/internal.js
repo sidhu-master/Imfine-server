@@ -4,6 +4,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { execFile } = require("child_process");
+const { MongoClient } = require("mongodb");
 
 const registerInternalRoutes = (
   app,
@@ -111,7 +112,7 @@ const registerInternalRoutes = (
     const wx = createWeChatClient({ db, getEnv });
 
     const logsCol = db.collection("wy_guardian_notify_logs");
-    const linksCol = db.collection("wy_guardian_links");
+    const linksCol = db.collection("wy_guardian_relations");
     const usersCol = db.collection("wy_users");
 
     const now = new Date();
@@ -594,6 +595,112 @@ const registerInternalRoutes = (
     })
   );
 
+  app.post(
+    "/internal/dbClear",
+    asyncHandler(async (req, res) => {
+      if (!requireInternalAuth(req, res)) return;
+
+      const confirm = req.body && req.body.confirm != null ? String(req.body.confirm) : "";
+      if (confirm !== "DELETE_ALL") {
+        return res.status(400).json({ ok: false, error: "confirm required", hint: "send { confirm: \"DELETE_ALL\" }" });
+      }
+
+      const db = await getDb();
+      if (!db || typeof db.listCollections !== "function") {
+        return res.json({ ok: true, mode: "memory", cleared: false, collections: [], totalDeleted: 0 });
+      }
+
+      const cols = await db.listCollections().toArray();
+      const names = cols
+        .map((c) => (c && c.name ? String(c.name) : ""))
+        .filter(Boolean)
+        .filter((n) => !n.startsWith("system."))
+        .slice(0, 500);
+
+      console.log("[db_clear] start", { collectionCount: names.length });
+
+      const collections = [];
+      let totalDeleted = 0;
+      for (const name of names) {
+        let deletedCount = 0;
+        try {
+          const r = await db.collection(name).deleteMany({});
+          deletedCount = Number(r && r.deletedCount) || 0;
+        } catch (_) {
+          deletedCount = 0;
+        }
+        totalDeleted += deletedCount;
+        collections.push({ name, deletedCount });
+      }
+
+      console.log("[db_clear] done", { collectionCount: names.length, totalDeleted });
+      return res.json({ ok: true, mode: "mongo", cleared: true, collections, totalDeleted });
+    })
+  );
+
+  app.post(
+    "/internal/dbClearWithMongo",
+    asyncHandler(async (req, res) => {
+      if (!requireInternalAuth(req, res)) return;
+
+      const uri = req.body && req.body.uri != null ? String(req.body.uri) : "";
+      const dbName = req.body && req.body.dbName != null ? String(req.body.dbName) : "";
+      const confirm = req.body && req.body.confirm != null ? String(req.body.confirm) : "";
+
+      const uriTrimmed = uri.trim();
+      const dbNameTrimmed = dbName.trim();
+
+      if (!(uriTrimmed.startsWith("mongodb://") || uriTrimmed.startsWith("mongodb+srv://"))) {
+        return res.status(400).json({ ok: false, error: "invalid uri" });
+      }
+      if (!dbNameTrimmed) return res.status(400).json({ ok: false, error: "missing dbName" });
+
+      const expectedConfirm = `DELETE_${dbNameTrimmed}`;
+      if (confirm !== expectedConfirm) {
+        return res.status(400).json({ ok: false, error: "confirm required", hint: `send { confirm: "${expectedConfirm}" }` });
+      }
+
+      const client = new MongoClient(uriTrimmed, { serverSelectionTimeoutMS: 8000 });
+      try {
+        await client.connect();
+        const db = client.db(dbNameTrimmed);
+
+        const cols = await db.listCollections().toArray();
+        const names = cols
+          .map((c) => (c && c.name ? String(c.name) : ""))
+          .filter(Boolean)
+          .filter((n) => !n.startsWith("system."))
+          .slice(0, 1000);
+
+        console.log("[db_clear_with_mongo] start", { dbName: dbNameTrimmed, collectionCount: names.length });
+
+        const collections = [];
+        let totalDeleted = 0;
+        for (const name of names) {
+          let deletedCount = 0;
+          try {
+            const r = await db.collection(name).deleteMany({});
+            deletedCount = Number(r && r.deletedCount) || 0;
+          } catch (_) {
+            deletedCount = 0;
+          }
+          totalDeleted += deletedCount;
+          collections.push({ name, deletedCount });
+        }
+
+        console.log("[db_clear_with_mongo] done", { dbName: dbNameTrimmed, collectionCount: names.length, totalDeleted });
+        return res.json({ ok: true, cleared: true, dbName: dbNameTrimmed, collections, totalDeleted });
+      } catch (e) {
+        const msg = e && e.message ? String(e.message) : "mongo connect failed";
+        return res.status(502).json({ ok: false, error: msg });
+      } finally {
+        try {
+          await client.close();
+        } catch (_) {}
+      }
+    })
+  );
+
   app.get("/internal/logStream", (req, res) => {
     if (!requireInternalAuth(req, res)) return;
 
@@ -728,14 +835,15 @@ const registerInternalRoutes = (
       const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
 
       const db = await getDb();
-      const col = db.collection("wy_guardian_links");
+      const col = db.collection("wy_guardian_relations");
       const docs = await col.find({}).limit(2000).toArray();
       const normalized = (docs || []).map((d) => ({
         id: d && d._id != null ? String(d._id) : "",
         elderOpenid: d && d.elderOpenid != null ? String(d.elderOpenid) : "",
         guardianMpOpenid: d && d.guardianMpOpenid != null ? String(d.guardianMpOpenid) : "",
-        scene: d && d.scene != null ? String(d.scene) : "",
-        ticket: d && d.ticket != null ? String(d.ticket) : "",
+        guardianOpenid: d && d.guardianOpenid != null ? String(d.guardianOpenid) : "",
+        scene: d && d.sceneType === "mp_bind" && d.scene != null ? String(d.scene) : "",
+        ticket: "",
         createdAt: d && d.createdAt != null ? d.createdAt : null,
         updatedAt: d && d.updatedAt != null ? d.updatedAt : null,
       }));
@@ -745,7 +853,8 @@ const registerInternalRoutes = (
             const a = (it.elderOpenid || "").toLowerCase();
             const b = (it.guardianMpOpenid || "").toLowerCase();
             const c = (it.scene || "").toLowerCase();
-            return a.includes(q) || b.includes(q) || c.includes(q);
+            const d = (it.guardianOpenid || "").toLowerCase();
+            return a.includes(q) || b.includes(q) || c.includes(q) || d.includes(q);
           })
         : normalized;
 
@@ -765,17 +874,19 @@ const registerInternalRoutes = (
       const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
 
       const db = await getDb();
-      const col = db.collection("wy_guardian_mini_links");
+      const col = db.collection("wy_guardian_relations");
 
       const docs = await col.find({}).limit(2000).toArray();
       const normalized = (docs || []).map((d) => ({
         id: d && d._id != null ? String(d._id) : "",
-        inviterOpenid: d && d.inviterOpenid != null ? String(d.inviterOpenid) : "",
-        inviteeOpenid: d && d.inviteeOpenid != null ? String(d.inviteeOpenid) : "",
+        inviterOpenid: d && d.elderOpenid != null ? String(d.elderOpenid) : "",
+        inviteeOpenid: d && d.guardianOpenid != null ? String(d.guardianOpenid) : "",
+        inviteeMpOpenid: d && d.guardianMpOpenid != null ? String(d.guardianMpOpenid) : "",
+        inviteeMpVerifiedAt: d && d.guardianMpVerifiedAt != null ? d.guardianMpVerifiedAt : null,
         inviterId: d && d.inviterId != null ? String(d.inviterId) : "",
         inviterName: d && d.inviterName != null ? String(d.inviterName) : "",
-        inviteeName: d && d.inviteeName != null ? String(d.inviteeName) : "",
-        sceneId: d && d.sceneId != null ? String(d.sceneId) : "",
+        inviteeName: d && d.guardianName != null ? String(d.guardianName) : "",
+        sceneId: d && d.sceneType === "mini_invite" && d.scene != null ? String(d.scene) : "",
         channel: d && d.channel != null ? String(d.channel) : "",
         envVersion: d && d.envVersion != null ? String(d.envVersion) : "",
         acceptedAt: d && d.acceptedAt != null ? d.acceptedAt : null,
@@ -790,6 +901,7 @@ const registerInternalRoutes = (
               (it.id || "").toLowerCase().includes(s) ||
               (it.inviterOpenid || "").toLowerCase().includes(s) ||
               (it.inviteeOpenid || "").toLowerCase().includes(s) ||
+              (it.inviteeMpOpenid || "").toLowerCase().includes(s) ||
               (it.inviterId || "").toLowerCase().includes(s) ||
               (it.inviterName || "").toLowerCase().includes(s) ||
               (it.inviteeName || "").toLowerCase().includes(s) ||
@@ -824,10 +936,9 @@ const registerInternalRoutes = (
       if (!id) return res.status(400).json({ ok: false, error: "missing id" });
 
       const db = await getDb();
-      const col = db.collection("wy_guardian_mini_links");
+      const col = db.collection("wy_guardian_relations");
       const r = await col.deleteOne({ _id: id });
-      if (!r || !r.deletedCount) return res.status(404).json({ ok: false, error: "not found" });
-      return res.json({ ok: true, deletedCount: r.deletedCount });
+      return res.json({ ok: true, deletedCount: Number(r && r.deletedCount) || 0 });
     })
   );
 
@@ -840,10 +951,9 @@ const registerInternalRoutes = (
       if (!id) return res.status(400).json({ ok: false, error: "missing id" });
 
       const db = await getDb();
-      const col = db.collection("wy_guardian_links");
+      const col = db.collection("wy_guardian_relations");
       const r = await col.deleteOne({ _id: id });
-      if (!r || !r.deletedCount) return res.status(404).json({ ok: false, error: "not found" });
-      return res.json({ ok: true, deletedCount: r.deletedCount });
+      return res.json({ ok: true, deletedCount: Number(r && r.deletedCount) || 0 });
     })
   );
 
