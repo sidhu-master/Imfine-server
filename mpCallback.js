@@ -189,7 +189,8 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
 
           const alreadyUsed = Boolean(bindScene.usedAt);
           const alreadySentCard = Boolean(bindScene.sendCardOk);
-          const shouldSendCard = !alreadyUsed || !alreadySentCard;
+          const bound = Boolean(await deps.db.collection("wy_guardian_relations").findOne({ sceneType: "mp_bind", scene }));
+          const shouldSendCard = !bound;
 
           await bindScenes.updateOne(
             { _id: scene },
@@ -212,6 +213,7 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
             elderOpenid: bindScene.elderOpenid,
             alreadyUsed,
             alreadySentCard,
+            bound,
             shouldSendCard,
           });
 
@@ -263,6 +265,7 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
                   sendCardOk: false,
                   sendCardMode: "text_fallback",
                   sendCardErr: r.error || "send failed",
+                  sendCardToMpOpenid: fromUser,
                 },
               }
             );
@@ -288,6 +291,7 @@ const handleMpCallback = async ({ method, query, body, deps, meta }) => {
                   sendCardOk: true,
                   sendCardMode: "miniprogrampage",
                   sendCardErr: "",
+                  sendCardToMpOpenid: fromUser,
                 },
               }
             );

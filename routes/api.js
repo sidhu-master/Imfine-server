@@ -434,7 +434,7 @@ const registerApiRoutes = (
       const openid = req.user && req.user.openid != null ? String(req.user.openid) : "";
       if (!openid) return res.status(401).json({ ok: false, error: "invalid token" });
 
-      const links = await db.collection("wy_guardian_mini_links").find({ inviteeOpenid: openid }).limit(200).toArray();
+      const links = await db.collection("wy_guardian_relations").find({ guardianOpenid: openid }).limit(200).toArray();
       const { dateKey } = getShanghaiParts();
 
       const isOpenidLike = (value) => {
@@ -448,8 +448,8 @@ const registerApiRoutes = (
         ...new Set(
           links
             .map((d) => {
-              const inviterOpenid = String(d && d.inviterOpenid != null ? d.inviterOpenid : "").trim();
-              if (inviterOpenid) return inviterOpenid;
+              const elderOpenid = String(d && d.elderOpenid != null ? d.elderOpenid : "").trim();
+              if (elderOpenid) return elderOpenid;
               const inviterId = String(d && d.inviterId != null ? d.inviterId : "").trim();
               return isOpenidLike(inviterId) ? inviterId : "";
             })
@@ -464,10 +464,10 @@ const registerApiRoutes = (
       const userMap = new Map(users.map((u) => [String(u && u._id != null ? u._id : ""), u]));
 
       const guardees = links.map((link, index) => {
-        const inviterOpenid = String(link && link.inviterOpenid != null ? link.inviterOpenid : "").trim();
+        const elderOpenid = String(link && link.elderOpenid != null ? link.elderOpenid : "").trim();
         const inviterId = String(link && link.inviterId != null ? link.inviterId : "").trim();
         const inviterName = String(link && link.inviterName != null ? link.inviterName : "").trim();
-        const resolvedOpenid = inviterOpenid || (isOpenidLike(inviterId) ? inviterId : "");
+        const resolvedOpenid = elderOpenid || (isOpenidLike(inviterId) ? inviterId : "");
         const user = resolvedOpenid ? userMap.get(resolvedOpenid) : null;
         const avatarUrl = user && user.avatarUrl != null ? String(user.avatarUrl) : "";
         const checkin = resolvedOpenid ? checkinMap.get(`${resolvedOpenid}_${dateKey}`) : null;
@@ -803,50 +803,45 @@ const registerApiRoutes = (
 
       const mpOpenidRaw = req.body && req.body.mpOpenid != null ? String(req.body.mpOpenid) : "";
       const mpOpenid = mpOpenidRaw ? mpOpenidRaw.trim() : "";
-      const mpTsRaw = req.body && req.body.mpTs != null ? String(req.body.mpTs) : "";
-      const mpTs = mpTsRaw ? Number.parseInt(mpTsRaw, 10) : NaN;
-      const mpSigRaw = req.body && req.body.mpSig != null ? String(req.body.mpSig) : "";
-      const mpSig = mpSigRaw ? mpSigRaw.trim() : "";
-
-      let verifiedInviteeMpOpenid = "";
-      if (mpOpenid && mpSig && Number.isFinite(mpTs)) {
-        const nowMs = Date.now();
-        const ageMs = nowMs - mpTs;
-        if (ageMs >= 0 && ageMs <= 15 * 60_000) {
-          const crypto = require("crypto");
-          const signSecret = getEnv("MP_MINI_OPENID_SIGN_SECRET") || requireEnv("API_JWT_SECRET");
-          const sigCtx = bindSceneId || sceneId || "";
-          const expected = crypto.createHmac("sha256", signSecret).update(`${mpOpenid}.${sigCtx}.${mpTs}`).digest("hex");
-          try {
-            const a = Buffer.from(expected, "utf8");
-            const b = Buffer.from(mpSig, "utf8");
-            if (a.length === b.length && crypto.timingSafeEqual(a, b)) verifiedInviteeMpOpenid = mpOpenid;
-          } catch (_) {}
-        }
-      }
+      const now = new Date();
 
       const elderOpenid = inviterOpenid ? String(inviterOpenid) : "";
       if (!elderOpenid) {
         return res.status(400).json({ ok: false, error: "missing inviterOpenid", code: "MISSING_INVITER_OPENID" });
       }
 
-      const relationId = `${elderOpenid}__${inviteeOpenid}`;
-      const relations = db.collection("wy_guardian_relations");
-      const existing = await relations.findOne({ _id: relationId });
+      let inferredMpOpenid = "";
+      if (!mpOpenid) {
+        const bindScenes = db.collection("wy_guardian_bind_scenes");
+        const recentBind = await bindScenes.findOne(
+          { elderOpenid, lastGuardianMpOpenid: { $exists: true, $ne: "" } },
+          { sort: { sendCardAt: -1, usedAt: -1, createdAt: -1 } }
+        );
+        inferredMpOpenid =
+          recentBind && recentBind.lastGuardianMpOpenid != null ? String(recentBind.lastGuardianMpOpenid).trim() : "";
+      }
 
-      const now = new Date();
-      if (!verifiedInviteeMpOpenid && bindSceneId && bindSceneDoc) {
-        const candidate = bindSceneDoc.lastGuardianMpOpenid != null ? String(bindSceneDoc.lastGuardianMpOpenid).trim() : "";
-        if (candidate) {
+      let verifiedInviteeMpOpenid = "";
+      const candidateMpOpenid = mpOpenid || inferredMpOpenid;
+      if (candidateMpOpenid) {
+        const inviteeDoc = await db.collection("wy_users").findOne({ _id: inviteeOpenid }, { projection: { unionid: 1 } });
+        const inviteeUnionid = inviteeDoc && inviteeDoc.unionid != null ? String(inviteeDoc.unionid) : "";
+        if (inviteeUnionid) {
           try {
-            const r = await wx.resolveUserByMpOpenid({ mpOpenid: candidate, now });
-            const userOpenid = r && r.ok && r.userOpenid ? String(r.userOpenid) : "";
-            if (userOpenid && userOpenid === inviteeOpenid) {
-              verifiedInviteeMpOpenid = candidate;
+            const resolved = await wx.resolveUserByMpOpenid({ mpOpenid: candidateMpOpenid, now });
+            const resolvedUnionid = resolved && resolved.ok && resolved.unionid ? String(resolved.unionid) : "";
+            const resolvedUserOpenid = resolved && resolved.ok && resolved.userOpenid ? String(resolved.userOpenid) : "";
+            if ((resolvedUnionid && resolvedUnionid === inviteeUnionid) || resolvedUserOpenid === inviteeOpenid) {
+              verifiedInviteeMpOpenid = candidateMpOpenid;
             }
           } catch (_) {}
         }
       }
+
+      const relationId = `${elderOpenid}__${inviteeOpenid}`;
+      const relations = db.collection("wy_guardian_relations");
+      const existing = await relations.findOne({ _id: relationId });
+
       const existingAcceptedAtRaw = existing && existing.acceptedAt != null ? existing.acceptedAt : null;
       const existingAcceptedAt = existingAcceptedAtRaw ? new Date(existingAcceptedAtRaw) : null;
       const acceptedAt = existingAcceptedAt && Number.isFinite(existingAcceptedAt.getTime()) ? existingAcceptedAt : now;
@@ -855,6 +850,13 @@ const registerApiRoutes = (
       const guardianAvatarExisting = existing && existing.guardianAvatarUrl != null ? String(existing.guardianAvatarUrl) : "";
       const guardianName = inviteeName || guardianNameExisting;
       const guardianAvatarUrl = inviteeAvatarUrl || guardianAvatarExisting;
+
+      const fallbackMpOpenid =
+        bindSceneId && bindSceneDoc && bindSceneDoc.lastGuardianMpOpenid != null
+          ? String(bindSceneDoc.lastGuardianMpOpenid).trim()
+          : "";
+      const finalCandidateMpOpenid = candidateMpOpenid || fallbackMpOpenid;
+      const guardianMpOpenid = verifiedInviteeMpOpenid || finalCandidateMpOpenid;
 
       const set = {
         elderOpenid,
@@ -871,8 +873,10 @@ const registerApiRoutes = (
         acceptedAt,
         updatedAt: now,
       };
+      if (guardianMpOpenid) {
+        set.guardianMpOpenid = guardianMpOpenid;
+      }
       if (verifiedInviteeMpOpenid) {
-        set.guardianMpOpenid = verifiedInviteeMpOpenid;
         set.guardianMpVerifiedAt = now;
       }
 
