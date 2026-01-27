@@ -656,10 +656,94 @@ const registerApiRoutes = (
   );
 
   app.post(
+    "/api/notifyGuardian/inviteStatus",
+    asyncHandler(async (req, res) => {
+      const code = req.body && req.body.code ? String(req.body.code) : "";
+      if (!code) return res.status(400).json({ ok: false, error: "missing code" });
+
+      const sceneIdRaw = req.body && req.body.sceneId != null ? String(req.body.sceneId) : "";
+      const sceneId = sceneIdRaw ? sceneIdRaw.trim() : "";
+
+      const bindSceneRaw =
+        req.body && req.body.bindScene != null
+          ? String(req.body.bindScene)
+          : req.body && req.body.scene != null
+            ? String(req.body.scene)
+            : "";
+      const bindScene = bindSceneRaw ? bindSceneRaw.trim() : "";
+
+      const inviterIdRaw = req.body && req.body.inviterId != null ? String(req.body.inviterId) : "";
+      const inviterNameRaw = req.body && req.body.inviterName != null ? String(req.body.inviterName) : "";
+      const inviterIdFallback = inviterIdRaw ? inviterIdRaw.trim() : "";
+      const inviterNameFallback = inviterNameRaw ? inviterNameRaw.trim() : "";
+
+      const db = await getDb();
+      const wx = createWeChatClient({ db, getEnv });
+
+      const mockOpenid = getEnv("WX_LOGIN_MOCK_OPENID");
+  app.post(
+      let inviteeOpenid = "";
+      if (mockOpenid) {
+        inviteeOpenid = String(mockOpenid);
+      } else {
+        const s = await wx.jscode2session({ code });
+        if (!s.ok) return res.status(502).json({ ok: false, error: s.error || "jscode2session failed" });
+        inviteeOpenid = s.openid || "";
+      }
+      if (!inviteeOpenid) return res.status(502).json({ ok: false, error: "missing openid" });
+
+      let inviterId = inviterIdFallback;
+      let inviterName = inviterNameFallback;
+      let inviterOpenid = "";
+      let resolvedSceneId = sceneId;
+      let expireAt = null;
+      let isExpired = false;
+
+      const bindSceneId = bindScene && bindScene.startsWith("wy_b_") ? bindScene : "";
+      if (bindSceneId) {
+        const doc = await db.collection("wy_guardian_bind_scenes").findOne({ _id: bindSceneId });
+        if (!doc) return res.status(404).json({ ok: false, error: "scene not found", code: "BIND_SCENE_NOT_FOUND" });
+        inviterId = doc.inviterId || inviterId;
+        inviterName = doc.inviterName || inviterName;
+        inviterOpenid = doc.elderOpenid || "";
+        resolvedSceneId = doc._id || bindSceneId;
+        expireAt = doc.expireAt != null ? Number(doc.expireAt) : null;
+        isExpired = Number.isFinite(expireAt) ? expireAt <= Date.now() : false;
+      } else if (sceneId) {
+        const doc = await db.collection("wy_invite_scenes").findOne({ _id: sceneId });
+        if (!doc) return res.status(404).json({ ok: false, error: "scene not found", code: "SCENE_NOT_FOUND" });
+        inviterId = doc.inviterId || inviterId;
+        inviterName = doc.inviterName || inviterName;
+        inviterOpenid = doc.inviterOpenid || "";
+        resolvedSceneId = doc._id || sceneId;
+        expireAt = doc.expireAt != null ? Number(doc.expireAt) : null;
+        isExpired = Number.isFinite(expireAt) ? expireAt <= Date.now() : false;
+      }
+
+      const relationKey = inviterOpenid
+        ? `${inviterOpenid}__${inviteeOpenid}`
+        : inviterId
+          ? `inviterId_${inviterId}__${inviteeOpenid}`
+          : resolvedSceneId
+            ? `${resolvedSceneId}__${inviteeOpenid}`
+            : "";
+      if (!relationKey) return res.json({ ok: true, alreadyAccepted: false, expireAt, isExpired });
+
+      const links = db.collection("wy_guardian_mini_links");
+      const existing = await links.findOne({ _id: relationKey });
+      if (existing) {
+        const acceptedAt = existing.acceptedAt ? new Date(existing.acceptedAt).getTime() : null;
+        return res.json({ ok: true, alreadyAccepted: true, acceptedAt: Number.isFinite(acceptedAt) ? acceptedAt : null });
+      }
+      return res.json({ ok: true, alreadyAccepted: false, expireAt: Number.isFinite(expireAt) ? expireAt : null, isExpired });
+    })
+  );
+
     "/api/notifyGuardian/acceptInvite",
     asyncHandler(async (req, res) => {
       const code = req.body && req.body.code ? String(req.body.code) : "";
       if (!code) return res.status(400).json({ ok: false, error: "missing code" });
+
 
       const sceneIdRaw = req.body && req.body.sceneId != null ? String(req.body.sceneId) : "";
       const bindSceneRaw = req.body && req.body.bindScene != null ? String(req.body.bindScene) : "";
