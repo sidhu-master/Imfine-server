@@ -889,6 +889,25 @@ const registerApiRoutes = (
         { upsert: true }
       );
 
+      const userSet = {
+        openid: inviteeOpenid,
+        nickname: guardianName || "",
+        avatarUrl: guardianAvatarUrl || "",
+        updatedAt: now,
+      };
+      if (verifiedInviteeMpOpenid) {
+        userSet.mpOpenid = verifiedInviteeMpOpenid;
+        userSet.mpOpenidUpdatedAt = now;
+      }
+      await db.collection("wy_users").updateOne(
+        { _id: inviteeOpenid },
+        {
+          $set: userSet,
+          $setOnInsert: { createdAt: now },
+        },
+        { upsert: true }
+      );
+
       const acceptedAtMs = acceptedAt ? acceptedAt.getTime() : null;
 
       const jwt = require("jsonwebtoken");
