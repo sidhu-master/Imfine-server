@@ -145,7 +145,13 @@ const registerInternalRoutes = (
 
       const dueText = minutesToTimeText(elderDueMin);
       const guardianDueText = guardianDue.dueText;
-      const elderName = getElderDisplayName(user, elderOpenid);
+      const relationForName = await linksCol.findOne(
+        { elderOpenid, inviterName: { $exists: true, $ne: "" } },
+        { sort: { updatedAt: -1, acceptedAt: -1, createdAt: -1 }, projection: { inviterName: 1 } }
+      );
+      const inviterName =
+        relationForName && relationForName.inviterName != null ? String(relationForName.inviterName).trim() : "";
+      const elderName = inviterName || getElderDisplayName(user, elderOpenid);
 
       const shouldRunNow = Boolean(force) || nowMin >= elderDueMin;
 

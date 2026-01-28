@@ -681,7 +681,6 @@ const registerApiRoutes = (
       const wx = createWeChatClient({ db, getEnv });
 
       const mockOpenid = getEnv("WX_LOGIN_MOCK_OPENID");
-  app.post(
       let inviteeOpenid = "";
       if (mockOpenid) {
         inviteeOpenid = String(mockOpenid);
@@ -720,17 +719,15 @@ const registerApiRoutes = (
         isExpired = Number.isFinite(expireAt) ? expireAt <= Date.now() : false;
       }
 
-      const relationKey = inviterOpenid
-        ? `${inviterOpenid}__${inviteeOpenid}`
-        : inviterId
-          ? `inviterId_${inviterId}__${inviteeOpenid}`
-          : resolvedSceneId
-            ? `${resolvedSceneId}__${inviteeOpenid}`
-            : "";
-      if (!relationKey) return res.json({ ok: true, alreadyAccepted: false, expireAt, isExpired });
-
-      const links = db.collection("wy_guardian_mini_links");
-      const existing = await links.findOne({ _id: relationKey });
+      const relations = db.collection("wy_guardian_relations");
+      const relationId = inviterOpenid ? `${inviterOpenid}__${inviteeOpenid}` : "";
+      let existing = relationId ? await relations.findOne({ _id: relationId }) : null;
+      if (!existing && inviterId) {
+        existing = await relations.findOne({ guardianOpenid: inviteeOpenid, inviterId });
+      }
+      if (!existing && resolvedSceneId) {
+        existing = await relations.findOne({ guardianOpenid: inviteeOpenid, scene: resolvedSceneId });
+      }
       if (existing) {
         const acceptedAt = existing.acceptedAt ? new Date(existing.acceptedAt).getTime() : null;
         return res.json({ ok: true, alreadyAccepted: true, acceptedAt: Number.isFinite(acceptedAt) ? acceptedAt : null });
@@ -739,6 +736,7 @@ const registerApiRoutes = (
     })
   );
 
+  app.post(
     "/api/notifyGuardian/acceptInvite",
     asyncHandler(async (req, res) => {
       const code = req.body && req.body.code ? String(req.body.code) : "";
@@ -979,8 +977,8 @@ const registerApiRoutes = (
         avatarUrl: guardianAvatarUrl || "",
         updatedAt: now,
       };
-      if (verifiedInviteeMpOpenid) {
-        userSet.mpOpenid = verifiedInviteeMpOpenid;
+      if (guardianMpOpenid) {
+        userSet.mpOpenid = guardianMpOpenid;
         userSet.mpOpenidUpdatedAt = now;
       }
       await db.collection("wy_users").updateOne(
