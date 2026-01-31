@@ -95,8 +95,14 @@ const registerInternalRoutes = (
     return candidates[0] || "";
   };
 
-  const buildTemplateData = ({ elderName, dateKey, dueTimeText }) => {
-    const nameValue = elderName ? `被守护者${elderName}` : "被守护者（未命名）";
+  const buildTemplateData = ({ elderName, dateKey, dueTimeText, kind }) => {
+    const name = elderName ? String(elderName) : "";
+    const nameValue =
+      kind === "guardian"
+        ? name
+          ? `被守护者${name}`
+          : "被守护者（未命名）"
+        : name || "未命名";
     const datePart = String(dateKey || "").trim();
     const timePart = String(dueTimeText || "").trim();
     const timeValue = datePart && timePart ? `${datePart} ${timePart}` : datePart || timePart || "";
@@ -231,7 +237,7 @@ const registerInternalRoutes = (
                 const r = await wx.sendMpTemplate({
                   toUser,
                   templateId,
-                  data: buildTemplateData({ elderName, dateKey, dueTimeText: dueText }),
+                  data: buildTemplateData({ elderName, dateKey, dueTimeText: dueText, kind: "elder" }),
                   miniProgram: miniAppid ? { appid: miniAppid, pagepath } : undefined,
                 });
                 await logsCol.updateOne(
@@ -325,7 +331,7 @@ const registerInternalRoutes = (
                 const r = await wx.sendMpTemplate({
                   toUser,
                   templateId,
-                  data: buildTemplateData({ elderName, dateKey, dueTimeText: guardianDueText }),
+                  data: buildTemplateData({ elderName, dateKey, dueTimeText: guardianDueText, kind: "guardian" }),
                   miniProgram: miniAppid ? { appid: miniAppid, pagepath } : undefined,
                 });
                 if (r.ok) sentTo.push(toUser);
@@ -1007,7 +1013,7 @@ const registerInternalRoutes = (
       const r = await wx.sendMpTemplate({
         toUser,
         templateId,
-        data: buildTemplateData({ elderName: effectiveElderName, dateKey, dueTimeText }),
+        data: buildTemplateData({ elderName: effectiveElderName, dateKey, dueTimeText, kind }),
         miniProgram: miniAppid ? { appid: miniAppid, pagepath } : undefined,
       });
       if (!r.ok) return res.status(502).json({ ok: false, error: r.error || "send failed" });
