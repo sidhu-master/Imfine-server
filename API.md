@@ -525,21 +525,20 @@ X-App-Version JSON 示例：
 
 ### 小程序入口
 
-小程序仍调用公司公众号 gateway 的公开地址：
+小程序调用 Imfine 后端的公开产品地址：
 
-`POST https://api.sidhu.net.cn/mp/ai/companion`
+`POST https://api.sidhu.net.cn/api/ai/companion`
 
-gateway 会转发到 Imfine 后端内部接口。无恙每日的人设、记忆系统、上下文组装属于 Imfine 后端；模型调度和密钥属于公司层。
+公网请求先进入 Imfine 后端。无恙每日的人设、记忆系统、上下文组装属于 Imfine 后端；模型调度和密钥属于公司层，并且只通过内网接口调用。
 
-### 内部接口
+### 产品接口
 
-`POST /internal/ai/companion`
+`POST /api/ai/companion`
 
 请求 Header：
 
 ```
 Content-Type: application/json
-x-internal-token: <INTERNAL_JOB_TOKEN>
 ```
 
 请求体示例：
@@ -555,6 +554,12 @@ x-internal-token: <INTERNAL_JOB_TOKEN>
   ]
 }
 ```
+
+### 内部接口
+
+`POST /internal/ai/companion`
+
+该接口给服务器内部调试/编排使用，需要 `x-internal-token`，不作为小程序入口。
 
 记忆键优先级：
 

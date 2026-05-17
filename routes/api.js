@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { handleAiCompanionChat } = require("../lib/aiCompanion");
 
 const registerApiRoutes = (
   app,
@@ -91,6 +92,28 @@ const registerApiRoutes = (
     if (hint === "image/webp") return { ext: "webp", contentType: "image/webp" };
     return { ext: "png", contentType: "image/png" };
   };
+
+  app.post(
+    "/api/ai/companion",
+    asyncHandler(async (req, res) => {
+      try {
+        const result = await handleAiCompanionChat({
+          body: req.body || {},
+          getDb,
+          getEnv,
+          nowIso: () => new Date().toISOString(),
+        });
+        return res.json(result);
+      } catch (err) {
+        const statusCode = err && err.statusCode ? Number(err.statusCode) : 500;
+        return res.status(Number.isFinite(statusCode) ? statusCode : 500).json({
+          ok: false,
+          code: err && err.code ? String(err.code) : "AI_COMPANION_FAILED",
+          error: err && err.message ? String(err.message) : "AI companion failed",
+        });
+      }
+    })
+  );
 
   app.post(
     "/api/wxLogin",

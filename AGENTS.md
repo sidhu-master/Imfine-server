@@ -14,14 +14,15 @@ Read this before changing Imfine backend code.
 ## Boundaries
 
 - Imfine owns 无恙每日 product behavior, including Mini Program APIs, daily check-in/guardian logic, AI companion persona, memory, and prompt context.
-- Company Official Account public `/mp/*` traffic enters through `company-wechat-gateway`.
-- `POST https://api.sidhu.net.cn/mp/ai/companion` is public gateway traffic; gateway forwards it to Imfine internal `POST /internal/ai/companion`.
+- Mini Program AI companion traffic enters Imfine first: `POST https://api.sidhu.net.cn/api/ai/companion`.
+- Do not expose company AI dispatch through public gateway routes. Company AI is internal-only.
 - Company layer owns AI model dispatch and model secrets. Imfine calls company-layer AI after building product context.
 - Do not commit secrets, `.env`, event logs, local database files, access tokens, phone data, or generated backups.
 
 ## AI Companion
 
-- Route: `POST /internal/ai/companion`
+- Public product route: `POST /api/ai/companion`
+- Internal helper route: `POST /internal/ai/companion`
 - Memory collection: `wy_ai_companion_memories`
 - Memory key priority: `phone_number`, then Mini Program `openid`, then Official Account `mp_openid`, then `conversation_id`.
 - The companion persona is “无恙陪伴员”: warm, grounded, concise, and focused on daily safety, family care, and small next actions.
