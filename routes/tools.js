@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 const registerToolsRoutes = (
   app,
@@ -7,6 +9,33 @@ const registerToolsRoutes = (
   app.get("/internal/authStatus", (req, res) => {
     if (!requireInternalAuth(req, res)) return;
     return res.json({ ok: true });
+  });
+
+  app.get("/internal/openclaw/dashboardInfo", (req, res) => {
+    if (!requireInternalAuth(req, res)) return;
+    const home = process.env.HOME ? String(process.env.HOME) : "/home/ubuntu";
+    const configPath = process.env.OPENCLAW_CONFIG_PATH
+      ? String(process.env.OPENCLAW_CONFIG_PATH)
+      : path.join(home, ".openclaw", "openclaw.json");
+    let token = "";
+    const publicPortRaw = process.env.OPENCLAW_PUBLIC_PORT ? String(process.env.OPENCLAW_PUBLIC_PORT) : "";
+    const publicPortNum = publicPortRaw ? Number(publicPortRaw) : NaN;
+    let port = Number.isFinite(publicPortNum) && publicPortNum > 0 ? publicPortNum : 18789;
+    try {
+      const raw = fs.readFileSync(configPath, "utf8");
+      const cfg = raw ? JSON.parse(raw) : null;
+      token =
+        cfg && cfg.gateway && cfg.gateway.auth && typeof cfg.gateway.auth.token === "string" ? cfg.gateway.auth.token : "";
+      const cfgPort = cfg && cfg.gateway && typeof cfg.gateway.port === "number" ? cfg.gateway.port : null;
+      if (!(Number.isFinite(publicPortNum) && publicPortNum > 0) && Number.isFinite(cfgPort) && cfgPort > 0) port = cfgPort;
+    } catch (_) {}
+
+    const hostOverrideRaw = process.env.OPENCLAW_PUBLIC_HOST ? String(process.env.OPENCLAW_PUBLIC_HOST) : "";
+    const hostHeader = (req.headers["x-forwarded-host"] || req.headers.host || "").toString().split(",")[0].trim();
+    const hostname = hostOverrideRaw.trim() || (hostHeader ? hostHeader.split(":")[0] : "127.0.0.1");
+    const schemeRaw = process.env.OPENCLAW_PUBLIC_SCHEME ? String(process.env.OPENCLAW_PUBLIC_SCHEME) : "";
+    const scheme = schemeRaw.trim().toLowerCase() || "http";
+    return res.json({ ok: true, scheme, host: hostname, port, token });
   });
 
   app.post(
@@ -168,6 +197,20 @@ const registerToolsRoutes = (
         <button id="serverRestart">重启服务</button>
         <span id="serverRestartStatus" class="muted"></span>
       </div>
+      <div class="row">
+        <div style="min-width:110px">OpenClaw</div>
+        <button id="openclawOpen">打开 Dashboard</button>
+        <button id="openclawCopy">复制链接</button>
+        <span id="openclawStatus" class="muted"></span>
+      </div>
+      <div class="row">
+        <div style="min-width:110px">代理</div>
+        <button id="proxyStart">启动</button>
+        <button id="proxyStop">停止</button>
+        <button id="proxyCheck">状态</button>
+        <span id="proxyStatus" class="muted"></span>
+      </div>
+      <div id="proxyHint" class="muted"></div>
       <pre id="serverRuntimeOut" class="mono" style="max-height:240px"></pre>
       <div id="serverRuntimeHint" class="muted"></div>
     </div>
@@ -419,6 +462,48 @@ const registerToolsRoutes = (
         $("serverRuntimeHint").textContent = hint;
       };
 
+      const renderProxyStatus = (status) => {
+        if (!status) {
+          $("proxyStatus").textContent = "";
+          $("proxyHint").textContent = "";
+          return;
+        }
+        const running = status.running === true;
+        const pid = status.pid != null ? String(status.pid) : "";
+        const startedAt = status.startedAt ? fmtTs(status.startedAt) : "";
+        $("proxyStatus").textContent = running ? "运行中" : "已停止";
+        const parts = [];
+        if (pid) parts.push("pid=" + pid);
+        if (startedAt) parts.push("启动=" + startedAt);
+        if (status.bin) parts.push("bin=" + status.bin);
+        if (status.config) parts.push("config=" + status.config);
+        if (!running && status.lastExit) {
+          const exitAt = status.lastExit.at ? fmtTs(status.lastExit.at) : "";
+          const exitCode = status.lastExit.code != null ? String(status.lastExit.code) : "";
+          const exitSignal = status.lastExit.signal ? String(status.lastExit.signal) : "";
+          const exitErr = status.lastExit.error ? String(status.lastExit.error) : "";
+          const exitParts = [];
+          if (exitAt) exitParts.push("退出=" + exitAt);
+          if (exitCode) exitParts.push("code=" + exitCode);
+          if (exitSignal) exitParts.push("signal=" + exitSignal);
+          if (exitErr) exitParts.push("error=" + exitErr);
+          if (exitParts.length) parts.push(exitParts.join(" "));
+        }
+        $("proxyHint").textContent = parts.join(" | ");
+      };
+
+      const loadProxyStatus = async () => {
+        try {
+          const j = await fetchJson("/internal/proxy/status");
+          renderProxyStatus(j && j.status ? j.status : null);
+          $("proxyStatus").classList.remove("error");
+        } catch (e) {
+          $("proxyStatus").textContent = "未登录";
+          $("proxyStatus").classList.add("error");
+          $("proxyHint").textContent = "";
+        }
+      };
+
       $("serverRuntime").onclick = async () => {
         $("serverRestartStatus").textContent = "检测中...";
         $("serverRestartStatus").classList.remove("error");
@@ -462,6 +547,86 @@ const registerToolsRoutes = (
         }
       };
 
+      $("proxyCheck").onclick = async () => {
+        $("proxyStatus").textContent = "检测中...";
+        $("proxyStatus").classList.remove("error");
+        await loadProxyStatus();
+      };
+
+      const buildOpenclawUrl = ({ scheme, host, port, token }) => {
+        const baseScheme = scheme && typeof scheme === "string" ? scheme : "http";
+        const baseHost = host && typeof host === "string" ? host : "127.0.0.1";
+        const basePort = Number.isFinite(Number(port)) ? Number(port) : 18789;
+        const t = token && typeof token === "string" ? token : "";
+        const url = baseScheme + "://" + baseHost + ":" + basePort + "/";
+        const gwScheme = baseScheme === "https" ? "wss" : "ws";
+        const gwUrl = gwScheme + "://" + baseHost + ":" + basePort;
+        const hash = (t ? ("token=" + encodeURIComponent(t)) : "") + "&gatewayUrl=" + encodeURIComponent(gwUrl);
+        return url + "#" + (hash.startsWith("&") ? hash.slice(1) : hash);
+      };
+
+      const loadOpenclawInfo = async () => {
+        const j = await fetchJson("/internal/openclaw/dashboardInfo");
+        const info = j && j.ok ? j : null;
+        const url = info ? buildOpenclawUrl(info) : "";
+        return { info, url };
+      };
+
+      $("openclawOpen").onclick = async () => {
+        $("openclawStatus").textContent = "加载中...";
+        $("openclawStatus").classList.remove("error");
+        try {
+          const { url } = await loadOpenclawInfo();
+          if (!url) throw new Error("missing url");
+          window.open(url, "_blank", "noopener,noreferrer");
+          $("openclawStatus").textContent = "已打开";
+        } catch (e) {
+          $("openclawStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
+          $("openclawStatus").classList.add("error");
+        }
+      };
+
+      $("openclawCopy").onclick = async () => {
+        $("openclawStatus").textContent = "生成链接...";
+        $("openclawStatus").classList.remove("error");
+        try {
+          const { url } = await loadOpenclawInfo();
+          if (!url) throw new Error("missing url");
+          const ok = navigator.clipboard && navigator.clipboard.writeText
+            ? (await navigator.clipboard.writeText(url), true)
+            : false;
+          if (!ok) prompt("复制这个链接：", url);
+          $("openclawStatus").textContent = "已复制";
+        } catch (e) {
+          $("openclawStatus").textContent = "失败：" + (e && e.message ? e.message : "unknown");
+          $("openclawStatus").classList.add("error");
+        }
+      };
+
+      $("proxyStart").onclick = async () => {
+        $("proxyStatus").textContent = "启动中...";
+        $("proxyStatus").classList.remove("error");
+        try {
+          const j = await fetchJson("/internal/proxy/start", { method: "POST" });
+          renderProxyStatus(j && j.status ? j.status : null);
+        } catch (e) {
+          $("proxyStatus").textContent = "启动失败：" + (e && e.message ? e.message : "unknown");
+          $("proxyStatus").classList.add("error");
+        }
+      };
+
+      $("proxyStop").onclick = async () => {
+        $("proxyStatus").textContent = "停止中...";
+        $("proxyStatus").classList.remove("error");
+        try {
+          const j = await fetchJson("/internal/proxy/stop", { method: "POST" });
+          renderProxyStatus(j && j.status ? j.status : null);
+        } catch (e) {
+          $("proxyStatus").textContent = "停止失败：" + (e && e.message ? e.message : "unknown");
+          $("proxyStatus").classList.add("error");
+        }
+      };
+
       $("toolsLogin").onclick = async () => {
         $("authHint").textContent = "登录中...";
         $("authHint").classList.remove("error");
@@ -483,6 +648,7 @@ const registerToolsRoutes = (
           } catch (_) {}
           $("toolsPassword").value = "";
           await checkAuth();
+          await loadProxyStatus();
         } catch (e) {
           const msg = e && e.message ? String(e.message) : "unknown";
           const raw = $("toolsPassword").value || "";
@@ -512,6 +678,7 @@ const registerToolsRoutes = (
           await fetchJson("/tools/logout", { method: "POST" });
         } catch (_) {}
         await checkAuth();
+        renderProxyStatus(null);
       };
 
       $("matLoad").onclick = async () => {
@@ -940,6 +1107,7 @@ const registerToolsRoutes = (
         });
         syncDbClearConfirmPlaceholder();
         checkAuth();
+        loadProxyStatus();
       };
       init();
     </script>

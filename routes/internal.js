@@ -3,8 +3,9 @@ const { handleMpCallback } = require("../mpCallback");
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 const { MongoClient } = require("mongodb");
+const { handleAiCompanionChat } = require("../lib/aiCompanion");
 
 const registerInternalRoutes = (
   app,
@@ -22,6 +23,22 @@ const registerInternalRoutes = (
   }
 ) => {
   let restartInProgress = false;
+  let proxyProcess = null;
+  let proxyStartedAt = null;
+  let proxyLastExit = null;
+
+  const getProxyPaths = () => {
+    const bin = String(getEnv("XRAY_BIN") || "").trim() || "/home/ubuntu/workspace/xray";
+    const config = String(getEnv("XRAY_CONFIG") || "").trim() || "/home/ubuntu/workspace/v2ray-config.json";
+    return { bin, config };
+  };
+
+  const getProxyStatus = () => {
+    const { bin, config } = getProxyPaths();
+    const running = Boolean(proxyProcess && !proxyProcess.killed);
+    const pid = running && proxyProcess && proxyProcess.pid ? proxyProcess.pid : null;
+    return { running, pid, startedAt: proxyStartedAt, lastExit: proxyLastExit, bin, config };
+  };
 
   const parseTimeTextToMinutes = (timeText) => {
     const s = String(timeText || "").trim();
@@ -382,6 +399,29 @@ const registerInternalRoutes = (
 
   startAutoRunner();
 
+  app.post(
+    "/internal/ai/companion",
+    asyncHandler(async (req, res) => {
+      if (!requireInternalAuth(req, res)) return;
+      try {
+        const result = await handleAiCompanionChat({
+          body: req.body || {},
+          getDb,
+          getEnv,
+          nowIso,
+        });
+        return res.json(result);
+      } catch (err) {
+        const statusCode = err && err.statusCode ? Number(err.statusCode) : 500;
+        return res.status(Number.isFinite(statusCode) ? statusCode : 500).json({
+          ok: false,
+          code: err && err.code ? String(err.code) : "AI_COMPANION_FAILED",
+          error: err && err.message ? String(err.message) : "AI companion failed",
+        });
+      }
+    })
+  );
+
   const getRuntimeInfo = () => {
     const pid = process.pid;
     const ppid = process.ppid;
@@ -459,6 +499,68 @@ const registerInternalRoutes = (
       const r = await runGuardianNotifyJob({ nowDateKey, nowTimeText: nowTimeText.trim() || undefined, force, waitHours: 24 });
       if (!r.ok) return res.status(400).json({ ok: false, error: r.error || "job failed" });
       return res.json(r);
+    })
+  );
+
+  app.get(
+    "/internal/proxy/status",
+    asyncHandler(async (req, res) => {
+      if (!requireInternalAuth(req, res)) return;
+      return res.json({ ok: true, status: getProxyStatus() });
+    })
+  );
+
+  app.post(
+    "/internal/proxy/start",
+    asyncHandler(async (req, res) => {
+      if (!requireInternalAuth(req, res)) return;
+      const current = getProxyStatus();
+      if (current.running) return res.json({ ok: true, status: current, alreadyRunning: true });
+      const { bin, config } = current;
+      if (!fs.existsSync(bin)) return res.status(404).json({ ok: false, error: "proxy binary not found" });
+      if (!fs.existsSync(config)) return res.status(404).json({ ok: false, error: "proxy config not found" });
+
+      proxyStartedAt = nowIso ? nowIso() : new Date().toISOString();
+      proxyLastExit = null;
+      const child = spawn(bin, ["-config", config], { stdio: "ignore" });
+      proxyProcess = child;
+      if (typeof child.unref === "function") child.unref();
+      child.on("error", (err) => {
+        proxyLastExit = {
+          code: null,
+          signal: null,
+          error: err && err.message ? String(err.message) : "spawn error",
+          at: nowIso ? nowIso() : new Date().toISOString(),
+        };
+        proxyProcess = null;
+        proxyStartedAt = null;
+      });
+      child.on("exit", (code, signal) => {
+        proxyLastExit = {
+          code: code == null ? null : Number(code),
+          signal: signal ? String(signal) : null,
+          at: nowIso ? nowIso() : new Date().toISOString(),
+        };
+        proxyProcess = null;
+        proxyStartedAt = null;
+      });
+
+      return res.json({ ok: true, status: getProxyStatus() });
+    })
+  );
+
+  app.post(
+    "/internal/proxy/stop",
+    asyncHandler(async (req, res) => {
+      if (!requireInternalAuth(req, res)) return;
+      const current = getProxyStatus();
+      if (!current.running || !proxyProcess) return res.json({ ok: true, status: current });
+      try {
+        proxyProcess.kill("SIGTERM");
+      } catch (err) {
+        return res.status(500).json({ ok: false, error: err && err.message ? String(err.message) : "stop failed" });
+      }
+      return res.json({ ok: true, status: getProxyStatus() });
     })
   );
 

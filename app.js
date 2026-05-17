@@ -1,5 +1,7 @@
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
 
+const fs = require("fs");
+const path = require("path");
 const express = require("express");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
@@ -9,6 +11,39 @@ const { createWeChatClient } = require("./lib/wechat");
 const { registerApiRoutes } = require("./routes/api");
 const { registerInternalRoutes } = require("./routes/internal");
 const { registerToolsRoutes } = require("./routes/tools");
+
+const loadEnvFile = () => {
+  const explicit = process.env.ENV_FILE ? String(process.env.ENV_FILE).trim() : "";
+  const candidates = [
+    explicit,
+    path.join(process.env.HOME ? String(process.env.HOME) : "/home/ubuntu", "imfine-server.env"),
+  ].filter(Boolean);
+  for (const filePath of candidates) {
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const lines = raw.split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const idx = trimmed.indexOf("=");
+        if (idx <= 0) continue;
+        const key = trimmed.slice(0, idx).trim();
+        let value = trimmed.slice(idx + 1).trim();
+        if (!key || Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+        if (
+          (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) ||
+          (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+        ) {
+          value = value.slice(1, -1);
+        }
+        process.env[key] = value;
+      }
+      return;
+    } catch (_) {}
+  }
+};
+
+loadEnvFile();
 
 const app = express();
 
@@ -329,6 +364,49 @@ const requireEnv = (name) => {
 
 const getEnv = (name) => (process.env[name] ? String(process.env[name]) : "");
 
+const readEnvValueFromFile = (key, filePath) => {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const lines = raw.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const idx = trimmed.indexOf("=");
+      if (idx <= 0) continue;
+      const k = trimmed.slice(0, idx).trim();
+      if (k !== key) continue;
+      let value = trimmed.slice(idx + 1).trim();
+      if (
+        (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) ||
+        (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+      ) {
+        value = value.slice(1, -1);
+      }
+      return value;
+    }
+  } catch (_) {}
+  return "";
+};
+
+const getInternalJobTokenCandidates = () => {
+  const out = [];
+  const pushToken = (v) => {
+    const t = v ? String(v).trim() : "";
+    if (!t) return;
+    if (!out.includes(t)) out.push(t);
+  };
+  pushToken(getEnv("INTERNAL_JOB_TOKEN"));
+  const explicit = process.env.ENV_FILE ? String(process.env.ENV_FILE).trim() : "";
+  if (explicit) pushToken(readEnvValueFromFile("INTERNAL_JOB_TOKEN", explicit));
+  pushToken(
+    readEnvValueFromFile(
+    "INTERNAL_JOB_TOKEN",
+    path.join(process.env.HOME ? String(process.env.HOME) : "/home/ubuntu", "imfine-server.env")
+  ));
+  pushToken(readEnvValueFromFile("INTERNAL_JOB_TOKEN", "/home/ubuntu/imfine-server.env"));
+  return out;
+};
+
 const toolsCookieName = "imfine_tools_session";
 const toolsPassword = process.env.TOOLS_PASSWORD ? String(process.env.TOOLS_PASSWORD) : "hujiaqih";
 
@@ -405,20 +483,24 @@ const verifyToolsSession = (token, secret) => {
 };
 
 const isInternalAuthed = (req) => {
-  const expected = getEnv("INTERNAL_JOB_TOKEN");
-  if (!expected) return false;
-  const token = (req.headers["x-internal-token"] || "").toString();
-  if (token && token === expected) return true;
+  const expectedList = getInternalJobTokenCandidates();
+  if (!expectedList.length) return false;
+  const token = (req.headers["x-internal-token"] || "").toString().trim();
+  if (token && expectedList.includes(token)) return true;
   const toolsSessionHeader = (req.headers["x-tools-session"] || "").toString();
   if (toolsSessionHeader) {
-    const r = verifyToolsSession(toolsSessionHeader, expected);
-    if (r.ok) return true;
+    for (const expected of expectedList) {
+      const r = verifyToolsSession(toolsSessionHeader, expected);
+      if (r.ok) return true;
+    }
   }
   const cookies = parseCookies(req.headers.cookie || "");
   const session = cookies[toolsCookieName];
   if (session) {
-    const r = verifyToolsSession(session, expected);
-    if (r.ok) return true;
+    for (const expected of expectedList) {
+      const r = verifyToolsSession(session, expected);
+      if (r.ok) return true;
+    }
   }
   return false;
 };
@@ -481,6 +563,7 @@ registerApiRoutes(app, {
   getEnv,
   requireEnv,
 });
+
 
 registerInternalRoutes(app, {
   asyncHandler,
