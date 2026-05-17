@@ -95,3 +95,28 @@ test("handleAiCompanionChat injects memory context and stores new memory", async
   assert.match(docs[0].summary, /疲惫/);
   assert.match(docs[0].summary, /喜欢你直接一点/);
 });
+
+test("handleAiCompanionChat does not turn memory questions into preferences", async () => {
+  const db = createFakeDb();
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ ok: true, conversation_id: "conv-2", reply: "记得，你喜欢直接一点。" }),
+  });
+
+  await handleAiCompanionChat({
+    body: {
+      conversation_id: "conv-2",
+      phone_number: "13800000001",
+      messages: [{ role: "user", content: "你记得我刚才说我喜欢怎样的回复吗？" }],
+    },
+    getDb: async () => db,
+    getEnv: (name) => (name === "INTERNAL_JOB_TOKEN" ? "internal-token" : ""),
+    nowIso: () => "2026-05-17T12:00:00.000+08:00",
+    fetchImpl,
+  });
+
+  const docs = db.dump("wy_ai_companion_memories");
+  assert.equal(docs.length, 1);
+  assert.deepEqual(docs[0].profile.preferences || [], []);
+});
